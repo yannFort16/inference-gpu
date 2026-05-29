@@ -1,3 +1,5 @@
+// Compile : nvcc -m64 -diag-suppress 2464  -o matrix_mult.exe .\script\test\tests_mat_mut.cu 
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
