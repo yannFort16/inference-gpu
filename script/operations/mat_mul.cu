@@ -48,10 +48,12 @@ __global__ void streamK_point(float *A, float * B, float * C,
     const int tile_n = ceil_div(n, BLK_N);
 
     const int total_iters = tile_m * tile_n * iters_per_tile;
-    const int iter_per_cta = ceil_div(total_iters, gridDim.x);
-
+    
+    int num_ctas = gridDim.x * gridDim.y;
+    int cta_id = blockIdx.y * gridDim.x + blockIdx.x;
+    int iter_per_cta = ceil_div(total_iters, num_ctas);
+    
     //Instantiate CTAs
-    const int cta_id = blockIdx.x;
     int iter = cta_id * iter_per_cta;
     int iter_end = min(iter + iter_per_cta, total_iters);
 
@@ -125,8 +127,10 @@ __global__ void streamK_point(float *A, float * B, float * C,
         }else{
             if(!tile_ended){
                 // accumulate partial sums from other CTA contributing to this tile
-                int cta_end = tile_iter_end/iters_per_tile;
-                for(int cta = cta_id + 1; cta < gridDim.x; cta++){
+                //int cta_end = tile_iter_end/iters_per_tile;
+                int last_cta_for_tile = (tile_iter_end - 1) / iter_per_cta;
+                for(int cta = cta_id + 1; cta <= last_cta_for_tile; cta++){
+                    float* partial_tile = partials + cta * BLK_M * BLK_N;
                     while((volatile int*)flags[cta] == 0){
                         __nanosleep(10);
                     }
@@ -181,7 +185,7 @@ int matrix_multiplication (float * A, float * B, float* C,
     cudaMemcpy(d_C, C, bytes_C, cudaMemcpyHostToDevice);
     
     // Launch kernel
-    printf("Launching point kernel...\n");
+    //printf("Launching point kernel...\n");
     
     int blockSize = 32; 
     int gridDimX = (m + blockSize - 1) / blockSize;
@@ -218,10 +222,10 @@ int matrix_multiplication (float * A, float * B, float* C,
         return 1;
     }
     
-    printf("Kernel execution completed!\n");
+    //printf("Kernel execution completed!\n");
     
     // Copy result back to host
-    printf("Copying results back to host...\n");
+    //printf("Copying results back to host...\n");
     cudaMemcpy(C, d_C, bytes_C, cudaMemcpyDeviceToHost);
 
     cudaFree(d_A);
