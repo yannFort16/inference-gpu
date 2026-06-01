@@ -84,7 +84,7 @@ int main() {
         generateRandomMatrix(h_A, m, k);
         generateRandomMatrix(h_B, k, n);
     
-        matrix_multiplication(h_A, h_B, h_C1, m, n, k, "streamK");
+        matrix_multiplication(h_A, h_B, h_C1, m, n, k, "sharedM");
         
         matrix_multiplication(h_A, h_B, h_C2, m, n, k, "default");
     

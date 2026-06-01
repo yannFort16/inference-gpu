@@ -5,6 +5,12 @@
 #define BLK_N 64 //Tile dim in N
 #define BLK_K 32 //Tile dim in K
 
+#define BLOCK_SIZE 32
+
+__device__ inline int ceil_div(int a, int b){
+    return (a + b - 1) / b;
+}
+
 __global__ void point(float *A, float * B, float * C,
                         float alpha, float beta, 
                         int m, int n, int k ){
@@ -25,14 +31,50 @@ __global__ void point(float *A, float * B, float * C,
 
 
 __global__ void point_shared(float *A, float * B, float * C,
-                        float alpha, float beta, 
                         int m, int n, int k ){
-    //TODO
+    
+    __shared__ float tile_A[BLOCK_SIZE][BLOCK_SIZE];
+    __shared__ float tile_B[BLOCK_SIZE][BLOCK_SIZE];
+    
+    const int tx = threadIdx.x;
+    const int ty = threadIdx.y;
 
-}
+    const int g_row = blockIdx.y * BLOCK_SIZE + ty;
+    const int g_col = blockIdx.x * BLOCK_SIZE + tx;
 
-__device__ inline int ceil_div(int a, int b){
-    return (a + b - 1) / b;
+    float sum = 0.0;
+
+    /*==============LOOP OVER THE TILES==============*/
+    const int nb_tiles = ceil_div(k,BLOCK_SIZE);
+    for(int t = 0; t<nb_tiles; t++){
+
+        const int t_col_A = t * BLOCK_SIZE + tx;
+        const int t_row_B = t * BLOCK_SIZE + ty;
+
+        if (g_row < m && t_col_A < k){
+            tile_A[ty][tx] = A[g_row * k + t_col_A];
+        }else{
+            tile_A[ty][tx] = 0;
+        }
+
+        if (g_col < n && t_row_B < k){
+            tile_B[ty][tx] = B[t_row_B * n + g_col];
+        }else{
+            tile_B[ty][tx] = 0;
+        }
+
+        __syncthreads();
+
+        for(int i = 0; i < BLOCK_SIZE; i++){
+            sum+= tile_A[ty][i] * tile_B[i][tx];
+        }
+
+        __syncthreads();
+    }
+
+    if (g_row < m && g_col<n){
+        C[g_row * n + g_col] = sum;
+    }
 }
 
 __global__ void streamK_point(float *A, float * B, float * C,
@@ -187,18 +229,18 @@ int matrix_multiplication (float * A, float * B, float* C,
     // Launch kernel
     //printf("Launching point kernel...\n");
     
-    int blockSize = 32; 
-    int gridDimX = (m + blockSize - 1) / blockSize;
-    int gridDimY = (n + blockSize - 1) / blockSize;
+    
+    int gridDimX = (m + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    int gridDimY = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
     int gridSize = gridDimX * gridDimY;
     
-    dim3 blockDim(blockSize, blockSize);
+    dim3 blockDim(BLOCK_SIZE, BLOCK_SIZE);
     dim3 gridDim(gridDimX, gridDimY);
     
     if (strcmp(methode, "default") == 0){
         point<<<gridDim, blockDim>>>(d_A, d_B, d_C, alpha, beta, m, n, k);
     }else if (strcmp(methode, "sharedM") == 0){
-        //TODO
+        point_shared<<<gridDim, blockDim>>>(d_A, d_B, d_C, m, n, k);
     }else if (strcmp(methode, "streamK") == 0){
         int* flags;
         float * partials;
