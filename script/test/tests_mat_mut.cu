@@ -84,9 +84,9 @@ int main() {
         generateRandomMatrix(h_A, m, k);
         generateRandomMatrix(h_B, k, n);
     
-        matrix_multiplication(h_A, h_B, h_C1, m, n, k, "sharedM");
+        matrix_multiplication(h_A, h_B, h_C1, m, n, k, "default");
         
-        matrix_multiplication(h_A, h_B, h_C2, m, n, k, "default");
+        matrix_multiplication(h_A, h_B, h_C2, m, n, k, "sharedM");
     
         bool v = compare_matrix(h_C1, h_C2, m, n, 1e-2f);
 

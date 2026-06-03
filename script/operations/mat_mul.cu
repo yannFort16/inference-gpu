@@ -250,6 +250,11 @@ __global__ void streamK_point(float *A, float * B, float * C,
 }
 
 
+void print_performance(float h2d_ms, float kernel_ms, float d2h_ms, float total_ms){
+    printf("  CUDA total (ms)\t|  Comput. Kernel(ms)\t|  Data trans. H->D(ms)\t|  Data trans. D->H(ms)\t|\n");
+    printf("  %.5f\t\t|  %.5f\t\t|  %.5f\t\t|  %.5f\t\t|\n", total_ms, kernel_ms, h2d_ms, d2h_ms);
+}
+
 int matrix_multiplication (float * A, float * B, float* C,
                             int m, int n, int k, char* methode = "default",
                             float alpha = 0.0, float beta = 1.0){
@@ -258,6 +263,16 @@ int matrix_multiplication (float * A, float * B, float* C,
         - sharedM
         - streamK
     */
+
+    int gridDimX = (m + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    int gridDimY = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    int gridSize = gridDimX * gridDimY;
+    
+    dim3 blockDim(BLOCK_SIZE, BLOCK_SIZE);
+    dim3 blockDimShared(BLOCK_SIZE / THREAD_TILE, BLOCK_SIZE / THREAD_TILE);
+    dim3 gridDim(gridDimX, gridDimY);
+
+
     float *d_A;
     float *d_B;
     float *d_C;
@@ -266,31 +281,32 @@ int matrix_multiplication (float * A, float * B, float* C,
     size_t bytes_B = k * n * sizeof(float);
     size_t bytes_C = m * n * sizeof(float);
     
+    // Events for CUDA timing
+    cudaEvent_t start, afterH2D, afterKernel, afterD2H;
+    cudaEventCreate(&start);
+    cudaEventCreate(&afterH2D);
+    cudaEventCreate(&afterKernel);
+    cudaEventCreate(&afterD2H);
+
     cudaMalloc((void**)&d_A, bytes_A);
     cudaMalloc((void**)&d_B, bytes_B);
     cudaMalloc((void**)&d_C, bytes_C);
 
-
+    cudaEventRecord(start);
     cudaMemcpy(d_A, A, bytes_A, cudaMemcpyHostToDevice);
     cudaMemcpy(d_B, B, bytes_B, cudaMemcpyHostToDevice);
     cudaMemcpy(d_C, C, bytes_C, cudaMemcpyHostToDevice);
     
+
     // Launch kernel
-    //printf("Launching point kernel...\n");
-    
-    
-    int gridDimX = (m + BLOCK_SIZE - 1) / BLOCK_SIZE;
-    int gridDimY = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
-    int gridSize = gridDimX * gridDimY;
-    
-    dim3 blockDim(BLOCK_SIZE, BLOCK_SIZE);
-    dim3 blockDimShared(BLOCK_SIZE / THREAD_TILE, BLOCK_SIZE / THREAD_TILE);
-    dim3 gridDim(gridDimX, gridDimY);
-    
     if (strcmp(methode, "default") == 0){
+        cudaEventRecord(afterH2D);
         point<<<gridDim, blockDim>>>(d_A, d_B, d_C, alpha, beta, m, n, k);
+        cudaEventRecord(afterKernel);
     }else if (strcmp(methode, "sharedM") == 0){
+        cudaEventRecord(afterH2D);
         point_shared<<<gridDim, blockDimShared>>>(d_A, d_B, d_C, m, n, k);
+        cudaEventRecord(afterKernel);
     }else if (strcmp(methode, "streamK") == 0){
         int* flags;
         float * partials;
@@ -303,7 +319,10 @@ int matrix_multiplication (float * A, float * B, float* C,
         cudaMalloc((void**)&partials, bytes_partials);
 
         cudaFuncSetAttribute(streamK_point, cudaFuncAttributeMaxDynamicSharedMemorySize, 65536);
+        
+        cudaEventRecord(afterH2D);
         streamK_point<<<gridDim, blockDim>>>(d_A, d_B, d_C, flags, partials, m, n, k);
+        cudaEventRecord(afterKernel);
 
         cudaFree(flags);
         cudaFree(partials);
@@ -319,9 +338,18 @@ int matrix_multiplication (float * A, float * B, float* C,
     // Copy result back to host
     //printf("Copying results back to host...\n");
     cudaMemcpy(C, d_C, bytes_C, cudaMemcpyDeviceToHost);
+    cudaEventRecord(afterD2H);
 
     cudaFree(d_A);
     cudaFree(d_B);
     cudaFree(d_C);
+
+    float h2d_ms, kernel_ms, d2h_ms, total_ms;
+    cudaEventElapsedTime(&h2d_ms, start, afterH2D);
+    cudaEventElapsedTime(&kernel_ms, afterH2D, afterKernel);
+    cudaEventElapsedTime(&d2h_ms, afterKernel, afterD2H);
+    cudaEventElapsedTime(&total_ms, start, afterD2H);
+
+    if (true) print_performance(h2d_ms, kernel_ms, d2h_ms, total_ms);
     return 0;
 }
