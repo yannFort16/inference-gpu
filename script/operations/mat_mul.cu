@@ -6,6 +6,7 @@
 #define BLK_K 32 //Tile dim in K
 
 #define BLOCK_SIZE 32
+#define THREAD_TILE 4
 
 __device__ inline int ceil_div(int a, int b){
     return (a + b - 1) / b;
@@ -39,19 +40,20 @@ __global__ void point_shared(float *A, float * B, float * C,
     const int tx = threadIdx.x;
     const int ty = threadIdx.y;
 
-    const int g_row = blockIdx.y * BLOCK_SIZE + ty;
-    const int g_col = blockIdx.x * BLOCK_SIZE + tx;
+    const int g_row = blockIdx.x * BLOCK_SIZE + ty * THREAD_TILE;
+    const int g_col = blockIdx.y * BLOCK_SIZE + tx * THREAD_TILE;
 
-    float sum = 0.0;
+    /*float sum = 0.0;*/
+    float accum[THREAD_TILE][THREAD_TILE] = {0.0};
 
     /*==============LOOP OVER THE TILES==============*/
     const int nb_tiles = ceil_div(k,BLOCK_SIZE);
     for(int t = 0; t<nb_tiles; t++){
 
-        const int t_col_A = t * BLOCK_SIZE + tx;
-        const int t_row_B = t * BLOCK_SIZE + ty;
+        const int t_col_A = t * BLOCK_SIZE + tx * THREAD_TILE;
+        const int t_row_B = t * BLOCK_SIZE + ty * THREAD_TILE;
 
-        if (g_row < m && t_col_A < k){
+        /*if (g_row < m && t_col_A < k){
             tile_A[ty][tx] = A[g_row * k + t_col_A];
         }else{
             tile_A[ty][tx] = 0;
@@ -61,19 +63,66 @@ __global__ void point_shared(float *A, float * B, float * C,
             tile_B[ty][tx] = B[t_row_B * n + g_col];
         }else{
             tile_B[ty][tx] = 0;
+        }*/
+        for (int v = 0; v < THREAD_TILE; v++) {
+            int row = g_row + v;
+            for (int u = 0; u < THREAD_TILE; u++) {
+                int colA = t_col_A + u;
+                int sharedRow = ty * THREAD_TILE + v;
+                int sharedCol = tx * THREAD_TILE + u;
+                tile_A[sharedRow][sharedCol] = (row < m && colA < k)
+                    ? A[row * k + colA]
+                    : 0.0f;
+            }
+        }
+
+        for (int v = 0; v < THREAD_TILE; v++) {
+            int rowB = t_row_B + v;
+            for (int u = 0; u < THREAD_TILE; u++) {
+                int col = g_col + u;
+                int sharedRow = ty * THREAD_TILE + v;
+                int sharedCol = tx * THREAD_TILE + u;
+                tile_B[sharedRow][sharedCol] = (rowB < k && col < n)
+                    ? B[rowB * n + col]
+                    : 0.0f;
+            }
         }
 
         __syncthreads();
 
-        for(int i = 0; i < BLOCK_SIZE; i++){
+        /*for(int i = 0; i < BLOCK_SIZE; i++){
             sum+= tile_A[ty][i] * tile_B[i][tx];
+        }*/
+        for(int i = 0; i < BLOCK_SIZE; i++){
+            float regA[THREAD_TILE];
+            float regB[THREAD_TILE];
+
+            for(int v =0; v<THREAD_TILE; v++){
+                //Load A
+                regA[v] = tile_A[ty * THREAD_TILE + v][i];
+                //Load B
+                regB[v] = tile_B[i][tx * THREAD_TILE + v];
+            }
+
+            for (int v = 0; v < THREAD_TILE; v++){
+                for (int w = 0; w < THREAD_TILE; w++){
+                    accum[v][w] += regA[v] * regB[w];
+                }
+            }
         }
+        
 
         __syncthreads();
     }
 
-    if (g_row < m && g_col<n){
-        C[g_row * n + g_col] = sum;
+    for (int v = 0; v < THREAD_TILE; v++){
+        for (int w = 0; w < THREAD_TILE; w++){
+            int row = g_row + v;
+            int col = g_col + w;
+            if (row < m && col < n){
+                C[row * n + col] = accum[v][w];
+            }
+        }
     }
 }
 
@@ -235,12 +284,13 @@ int matrix_multiplication (float * A, float * B, float* C,
     int gridSize = gridDimX * gridDimY;
     
     dim3 blockDim(BLOCK_SIZE, BLOCK_SIZE);
+    dim3 blockDimShared(BLOCK_SIZE / THREAD_TILE, BLOCK_SIZE / THREAD_TILE);
     dim3 gridDim(gridDimX, gridDimY);
     
     if (strcmp(methode, "default") == 0){
         point<<<gridDim, blockDim>>>(d_A, d_B, d_C, alpha, beta, m, n, k);
     }else if (strcmp(methode, "sharedM") == 0){
-        point_shared<<<gridDim, blockDim>>>(d_A, d_B, d_C, m, n, k);
+        point_shared<<<gridDim, blockDimShared>>>(d_A, d_B, d_C, m, n, k);
     }else if (strcmp(methode, "streamK") == 0){
         int* flags;
         float * partials;

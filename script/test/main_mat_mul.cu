@@ -5,7 +5,7 @@
 
 // Function to generate random matrix on host
 void generateRandomMatrix(float *matrix, int rows, int cols) {
-    //srand(time(NULL));
+    srand(time(NULL));
     for (int i = 0; i < rows * cols; i++) {
         //matrix[i] = (float)rand() / RAND_MAX * 10.0;  // Random values between 0 and 10
         matrix[i] = rand() % 6; // Random int between 0 and 5
