@@ -1,6 +1,8 @@
+//Compile : nvcc -m64 -diag-suppress 2464  -o matrix_mult.exe .\script\test\main_mat_mut.cu 
+
 #include <stdio.h>
 #include <cuda_runtime.h>
-//#include <time.h>
+#include <time.h>
 #include "../operations/mat_mul.cu"
 
 // Function to generate random matrix on host

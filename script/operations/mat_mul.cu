@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 
+//For StreamK
 #define BLK_M 64 //Tile dim in M
 #define BLK_N 64 //Tile dim in N
 #define BLK_K 32 //Tile dim in K
@@ -15,7 +16,10 @@ __device__ inline int ceil_div(int a, int b){
 __global__ void point(float *A, float * B, float * C,
                         float alpha, float beta, 
                         int m, int n, int k ){
-
+    /*
+    Kernel for simple general matrix multiplication.
+    input : matrix A of floats size (m,k), matrix B of floats size (k,n), matrix C of floats size (m,n) to store the result of (alpha * C) + beta * (A@B)
+    */
     const int row = blockIdx.x * blockDim.x + threadIdx.x;
     const int col = blockIdx.y * blockDim.x + threadIdx.y;
     if (row < m && col < n){
@@ -31,9 +35,14 @@ __global__ void point(float *A, float * B, float * C,
 }
 
 
-__global__ void point_shared(float *A, float * B, float * C,
+__global__ void point_shared(float *__restrict__ A, float *__restrict__  B, float *__restrict__  C,
+                        float alpha, float beta,
                         int m, int n, int k ){
-    
+    /*
+    Kernel for general matrix multiplication using shared memory and other optimization techniniques.
+    input : matrix A of floats size (m,k), matrix B of floats size (k,n), matrix C of floats size (m,n) to store the result of A@B 
+    */
+
     __shared__ float tile_A[BLOCK_SIZE][BLOCK_SIZE];
     __shared__ float tile_B[BLOCK_SIZE][BLOCK_SIZE];
     
@@ -43,33 +52,22 @@ __global__ void point_shared(float *A, float * B, float * C,
     const int g_row = blockIdx.x * BLOCK_SIZE + ty * THREAD_TILE;
     const int g_col = blockIdx.y * BLOCK_SIZE + tx * THREAD_TILE;
 
-    /*float sum = 0.0;*/
     float accum[THREAD_TILE][THREAD_TILE] = {0.0};
 
-    /*==============LOOP OVER THE TILES==============*/
+    /*==============LOOP OVER THE TILES TO LOAD SHARED MEMORY==============*/
     const int nb_tiles = ceil_div(k,BLOCK_SIZE);
     for(int t = 0; t<nb_tiles; t++){
 
         const int t_col_A = t * BLOCK_SIZE + tx * THREAD_TILE;
         const int t_row_B = t * BLOCK_SIZE + ty * THREAD_TILE;
 
-        /*if (g_row < m && t_col_A < k){
-            tile_A[ty][tx] = A[g_row * k + t_col_A];
-        }else{
-            tile_A[ty][tx] = 0;
-        }
-
-        if (g_col < n && t_row_B < k){
-            tile_B[ty][tx] = B[t_row_B * n + g_col];
-        }else{
-            tile_B[ty][tx] = 0;
-        }*/
         for (int v = 0; v < THREAD_TILE; v++) {
             int row = g_row + v;
             for (int u = 0; u < THREAD_TILE; u++) {
                 int colA = t_col_A + u;
                 int sharedRow = ty * THREAD_TILE + v;
                 int sharedCol = tx * THREAD_TILE + u;
+                //Load A in shared memory
                 tile_A[sharedRow][sharedCol] = (row < m && colA < k)
                     ? A[row * k + colA]
                     : 0.0f;
@@ -82,7 +80,9 @@ __global__ void point_shared(float *A, float * B, float * C,
                 int col = g_col + u;
                 int sharedRow = ty * THREAD_TILE + v;
                 int sharedCol = tx * THREAD_TILE + u;
-                tile_B[sharedRow][sharedCol] = (rowB < k && col < n)
+                //Load B in shared memory
+                //Transposing B for easier memory access
+                tile_B[sharedCol][sharedRow] = (rowB < k && col < n)
                     ? B[rowB * n + col]
                     : 0.0f;
             }
@@ -90,21 +90,23 @@ __global__ void point_shared(float *A, float * B, float * C,
 
         __syncthreads();
 
-        /*for(int i = 0; i < BLOCK_SIZE; i++){
-            sum+= tile_A[ty][i] * tile_B[i][tx];
-        }*/
+        /*==============Matrix Multiplication==============*/
+        #pragma unroll 
         for(int i = 0; i < BLOCK_SIZE; i++){
             float regA[THREAD_TILE];
             float regB[THREAD_TILE];
 
             for(int v =0; v<THREAD_TILE; v++){
-                //Load A
+                //Load thread tile from A in shared memory in order to have const
                 regA[v] = tile_A[ty * THREAD_TILE + v][i];
-                //Load B
-                regB[v] = tile_B[i][tx * THREAD_TILE + v];
+                //Load thread tile from B in shared memory in order to have const
+                regB[v] = tile_B[tx * THREAD_TILE + v][i];
             }
 
+            //Matrix Multiplication Loop
+            #pragma unroll
             for (int v = 0; v < THREAD_TILE; v++){
+                #pragma unroll
                 for (int w = 0; w < THREAD_TILE; w++){
                     accum[v][w] += regA[v] * regB[w];
                 }
@@ -115,12 +117,15 @@ __global__ void point_shared(float *A, float * B, float * C,
         __syncthreads();
     }
 
+    //Load the result of the Matrix Multiplication into C
+    #pragma unroll
     for (int v = 0; v < THREAD_TILE; v++){
+        #pragma unroll
         for (int w = 0; w < THREAD_TILE; w++){
             int row = g_row + v;
             int col = g_col + w;
             if (row < m && col < n){
-                C[row * n + col] = accum[v][w];
+                C[row * n + col] = alpha * C[row * n + col] + beta * accum[v][w];
             }
         }
     }
@@ -256,12 +261,14 @@ void print_performance(float h2d_ms, float kernel_ms, float d2h_ms, float total_
 }
 
 int matrix_multiplication (float * A, float * B, float* C,
-                            int m, int n, int k, char* methode = "default",
-                            float alpha = 0.0, float beta = 1.0){
-    /*Mehodes :
-        - default
-        - sharedM
-        - streamK
+                            int m, int n, int k, char* methode = "default", 
+                            bool perf = false, float alpha = 0.0, float beta = 1.0){
+    /*General Matrix Multiplication using parallele compluting.
+        Compute (alpha * C) + beta * (A@B)
+    Mehodes :
+        - default => simple no optimization
+        - sharedM => unsing shared memory + transposed B matrix
+        - streamK => tile decomposition (NOT Working)
     */
 
     int gridDimX = (m + BLOCK_SIZE - 1) / BLOCK_SIZE;
@@ -288,10 +295,12 @@ int matrix_multiplication (float * A, float * B, float* C,
     cudaEventCreate(&afterKernel);
     cudaEventCreate(&afterD2H);
 
+    // Allocate device memory
     cudaMalloc((void**)&d_A, bytes_A);
     cudaMalloc((void**)&d_B, bytes_B);
     cudaMalloc((void**)&d_C, bytes_C);
 
+    // Host to Device
     cudaEventRecord(start);
     cudaMemcpy(d_A, A, bytes_A, cudaMemcpyHostToDevice);
     cudaMemcpy(d_B, B, bytes_B, cudaMemcpyHostToDevice);
@@ -305,7 +314,7 @@ int matrix_multiplication (float * A, float * B, float* C,
         cudaEventRecord(afterKernel);
     }else if (strcmp(methode, "sharedM") == 0){
         cudaEventRecord(afterH2D);
-        point_shared<<<gridDim, blockDimShared>>>(d_A, d_B, d_C, m, n, k);
+        point_shared<<<gridDim, blockDimShared>>>(d_A, d_B, d_C, alpha, beta, m, n, k);
         cudaEventRecord(afterKernel);
     }else if (strcmp(methode, "streamK") == 0){
         int* flags;
@@ -322,7 +331,7 @@ int matrix_multiplication (float * A, float * B, float* C,
         
         cudaEventRecord(afterH2D);
         streamK_point<<<gridDim, blockDim>>>(d_A, d_B, d_C, flags, partials, m, n, k);
-        cudaEventRecord(afterKernel);
+        cudaEventRecord(afterKernel); 
 
         cudaFree(flags);
         cudaFree(partials);
@@ -350,6 +359,6 @@ int matrix_multiplication (float * A, float * B, float* C,
     cudaEventElapsedTime(&d2h_ms, afterKernel, afterD2H);
     cudaEventElapsedTime(&total_ms, start, afterD2H);
 
-    if (true) print_performance(h2d_ms, kernel_ms, d2h_ms, total_ms);
+    if (perf) print_performance(h2d_ms, kernel_ms, d2h_ms, total_ms);
     return 0;
 }
