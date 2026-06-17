@@ -2,8 +2,6 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <math.h>
-#include <cuda_runtime.h>
 #include "../header/mat_mul.h"
 #include "../header/utils.h"
 

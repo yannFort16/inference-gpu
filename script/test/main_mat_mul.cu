@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <cuda_runtime.h>
 #include <time.h>
-#include "../operation/mat_mul.cu"
+#include "../header/mat_mul.h"
 #include "../header/utils.h"
 
 

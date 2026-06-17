@@ -97,9 +97,9 @@ bool compare_matrix(const float *mat1, const float *mat2, int rows, int cols) {
 
     if (!equal) {
         printf("Matrix compare failed: %d mismatches, max difference = %f\n", mismatch_count, max_diff);
-    } else {
+    }/* else {
         printf("Matrix compare succeeded: max difference = %f\n", max_diff);
-    }
+    }*/
 
     return equal;
 }
