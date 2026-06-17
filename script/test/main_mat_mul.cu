@@ -3,69 +3,9 @@
 #include <stdio.h>
 #include <cuda_runtime.h>
 #include <time.h>
-#include "../operations/mat_mul.cu"
+#include "../operation/mat_mul.cu"
+#include "../header/utils.h"
 
-// Function to generate random matrix on host
-void generateRandomMatrix(float *matrix, int rows, int cols) {
-    srand(time(NULL));
-    for (int i = 0; i < rows * cols; i++) {
-        //matrix[i] = (float)rand() / RAND_MAX * 10.0;  // Random values between 0 and 10
-        matrix[i] = rand() % 6; // Random int between 0 and 5
-    }
-}
-
-// Function to verify results
-void printMatrix(const float *matrix, int rows, int cols, int maxElements = 5) {
-    /*int min_x = min(rows, maxElements);
-    int min_y = min(cols, maxElements);
-    for (int i = 0; i< min_x; ++i){
-        for(int j = 0; j< min_y; ++j){
-            if (i == rows-1 || j == cols-1 || i<=maxElements-2 || j<=maxElements-2 )
-            {
-                printf("%f ", matrix[i*cols+j]);
-            }            else{
-                printf("... ");
-            }
-        }
-        printf("\n");
-    }*/
-    using std::min;
-
-    int visibleRows = min(rows, maxElements);
-    int visibleCols = min(cols, maxElements);
-
-    for (int i = 0; i < rows; ++i)
-    {
-        // Skip middle rows
-        if (rows > maxElements + 1 &&
-            i >= visibleRows - 1 &&
-            i < rows - 1)
-        {
-            if (i == visibleRows - 1)
-                printf("\t...\n");
-
-            continue;
-        }
-
-        for (int j = 0; j < cols; ++j)
-        {
-            // Skip middle columns
-            if (cols > maxElements + 1 &&
-                j >= visibleCols - 1 &&
-                j < cols - 1)
-            {
-                if (j == visibleCols - 1)
-                    printf("... ");
-
-                continue;
-            }
-
-            printf("%8.3f ", matrix[i * cols + j]);
-        }
-
-        printf("\n");
-    }
-}
 
 int main() {
     printf("===== CUDA Matrix Multiplication =====\n\n");
@@ -91,8 +31,8 @@ int main() {
     
     // Generate random matrices
     printf("Generating random matrices...\n");
-    generateRandomMatrix(h_A, m, k);
-    generateRandomMatrix(h_B, k, n);
+    generateRandomMatrix(h_A, m, k, 10, true);
+    generateRandomMatrix(h_B, k, n, 10, true);
     
     printf("Matrix A sample:\n");
     printMatrix(h_A, m, k, 5);

@@ -4,48 +4,9 @@
 #include <stdlib.h>
 #include <math.h>
 #include <cuda_runtime.h>
-#include "../operations/mat_mul.cu"
+#include "../header/mat_mul.h"
+#include "../header/utils.h"
 
-// Function to generate random matrix on host
-void generateRandomMatrix(float *matrix, int rows, int cols) {
-    //srand(time(NULL));
-    for (int i = 0; i < rows * cols; i++) {
-        matrix[i] = (float)rand() / RAND_MAX * 10.0;  // Random values between 0 and 10
-    }
-}
-
-bool compare_matrix(const float *mat1, const float *mat2, int rows, int cols, float epsilon = 1e-3f) {
-    int total = rows * cols;
-    bool equal = true;
-    float max_diff = 0.0f;
-    int mismatch_count = 0;
-
-    for (int idx = 0; idx < total; ++idx) {
-        float a = mat1[idx];
-        float b = mat2[idx];
-        float diff = fabsf(a - b);
-        if (diff > max_diff) {
-            max_diff = diff;
-        }
-        if (diff > epsilon) {
-            if (mismatch_count < 5) {
-                int row = idx / cols;
-                int col = idx % cols;
-                printf("Mismatch at [%d,%d]: %f vs %f (diff=%f)\n", row, col, a, b, diff);
-            }
-            mismatch_count++;
-            equal = false;
-        }
-    }
-
-    if (!equal) {
-        printf("Matrix compare failed: %d mismatches, max difference = %f\n", mismatch_count, max_diff);
-    } else {
-        printf("Matrix compare succeeded: max difference = %f\n", max_diff);
-    }
-
-    return equal;
-}
 
 int main() {
     printf("===== Test CUDA Matrix Multiplication =====\n\n");
@@ -81,14 +42,14 @@ int main() {
             h_C2[i] = 0.0;
         } 
 
-        generateRandomMatrix(h_A, m, k);
-        generateRandomMatrix(h_B, k, n);
+        generateRandomMatrix(h_A, m, k, 50, false);
+        generateRandomMatrix(h_B, k, n, 50, false);
     
         matrix_multiplication(h_A, h_B, h_C1, m, n, k, "default");
         
         matrix_multiplication(h_A, h_B, h_C2, m, n, k, "sharedM");
     
-        bool v = compare_matrix(h_C1, h_C2, m, n, 1e-2f);
+        bool v = compare_matrix(h_C1, h_C2, m, n);
 
         if (v) {
             printf("Test %d passed\n", t);
