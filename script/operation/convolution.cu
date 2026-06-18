@@ -164,7 +164,7 @@ __global__ void convolution_shared(float* input, int c, int m, int n, float *out
 
 
 float* convolution(float *input, int m, int n, int c, float *filter, int k,
-                char* methode, bool pad, int stride, int pad_val){
+                char* methode, bool pad, int stride, int pad_val, bool perf){
 /* input : input data composed of 2D array over the c chanels
    dim(input) = (c, m, n)
    
@@ -197,31 +197,86 @@ float* convolution(float *input, int m, int n, int c, float *filter, int k,
 
     float* output = (float*)malloc(bytes_output);
 
+    // Events for CUDA timing
+    cudaEvent_t start, afterH2D, afterKernel, afterD2H;
+    cudaEventCreate(&start);
+    cudaEventCreate(&afterH2D);
+    cudaEventCreate(&afterKernel);
+    cudaEventCreate(&afterD2H);
+
+    cudaEventRecord(start);
     cudaMemcpy(d_input, input, bytes_input, cudaMemcpyHostToDevice);
     cudaMemcpy(d_filter, filter, bytes_filter, cudaMemcpyHostToDevice);
     
 
     if(strcmp(methode, "default") == 0){
+        cudaEventRecord(afterH2D);
         convolution_default<<<grid, block>>>(d_input, c, m, n, d_filter, k, stride, d_output,
                                         nb_patch_w, nb_patch_h);
+        cudaEventRecord(afterKernel);
 
+        cudaMemcpy(output, d_output, bytes_output, cudaMemcpyDeviceToHost);
+        cudaEventRecord(afterD2H);
     }else if (strcmp(methode, "shared") == 0){
         size_t shared_bytes = (BLOCK_SIZE + k-1)*(BLOCK_SIZE + k-1)*sizeof(float);
 
+        cudaEventRecord(afterH2D);
         convolution_shared<<<grid, block, shared_bytes>>>(d_input, c,  m,  n, d_output, k, 
                             d_filter, stride, nb_patch_w, nb_patch_h);
+        cudaEventRecord(afterKernel);
+
+        cudaMemcpy(output, d_output, bytes_output, cudaMemcpyDeviceToHost);
+        cudaEventRecord(afterD2H);
+        
     }else if (strcmp(methode, "split") == 0){
-        //Use kernel to build a patch matrix. Use existing matrix_multiplication
-        //TODO    
+        //Use kernel to build a patch matrix. Use existing matrix_multiplication from mat_mul.cu
+        int nb_patches = nb_patch_h * nb_patch_w;
+        size_t bytes_patch_mat = c * nb_patches * k * k * sizeof(float);
+        float* patch_mat = (float*)malloc(bytes_patch_mat);
+        float* d_patch_mat;
+        cudaMalloc((void**)&d_patch_mat, bytes_patch_mat);
+
+        cudaEventRecord(afterH2D);
+        //Build Patch Matrix
+        patch_mat3<<<grid, block>>>(d_input, c, m, n, d_patch_mat, k, stride, nb_patch_w, nb_patch_h);
+        cudaEventRecord(afterKernel);
+
+        // Copy patch matrix from device to host
+        cudaMemcpy(patch_mat, d_patch_mat, bytes_patch_mat, cudaMemcpyDeviceToHost);
+        cudaFree(d_patch_mat);
+        
+        // Flatten Kernel - concatenate all kernels for all channels
+        size_t bytes_flat_kernel = c * k * k * sizeof(float);
+        float* flat_kernel = (float*)malloc(bytes_flat_kernel);
+        memcpy(flat_kernel, filter, bytes_flat_kernel);
+        
+        // Matrix Multiplication: flat_kernel (1 x c*k*k) @ patch_mat (c*k*k x nb_patches)
+        // Result: output (1 x nb_patches), then reshape to (nb_patch_h x nb_patch_w)
+        matrix_multiplication(flat_kernel, patch_mat, output, 1, nb_patches, c * k * k, "sharedM", false);
+        
+        free(flat_kernel);
+        free(patch_mat);
+        cudaEventRecord(afterD2H);
+
     }else{
         cudaFree(d_input);
         cudaFree(d_output);
         cudaFree(d_filter);
-        printf("Methode selected not found. Try default, shared\n");
+        printf("Methode selected not found. Try default or shared\n");
         exit(1);
     }
     
-    cudaMemcpy(output, d_output, bytes_output, cudaMemcpyDeviceToHost);
+    
+    if(perf){
+        float h2d_ms, kernel_ms, d2h_ms, total_ms;
+        cudaEventElapsedTime(&h2d_ms, start, afterH2D);
+        cudaEventElapsedTime(&kernel_ms, afterH2D, afterKernel);
+        cudaEventElapsedTime(&d2h_ms, afterKernel, afterD2H);
+        cudaEventElapsedTime(&total_ms, start, afterD2H);
+
+        print_performance(h2d_ms, kernel_ms, d2h_ms, total_ms);
+    }
+
     cudaFree(d_input);
     cudaFree(d_output);
     cudaFree(d_filter);

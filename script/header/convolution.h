@@ -2,7 +2,8 @@
 #define CONV_H
 
 float* convolution(float *input, int m, int n, int c, float *filter, int k,
-                char* methode  = "default", bool pad = false, int stride = 1, int pad_val = 0);
+                char* methode  = "default", bool pad = false, int stride = 1, 
+                int pad_val = 0, bool perf = false);
 /* methode is either : default || shared || split
 
     input : input data composed of 2D array over the c chanels

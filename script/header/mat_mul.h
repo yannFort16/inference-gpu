@@ -16,5 +16,6 @@ int matrix_multiplication (float * A, float * B, float* C,
         - streamK => tile decomposition (NOT Working)
 */
 
+void print_performance(float h2d_ms, float kernel_ms, float d2h_ms, float total_ms);
 
 #endif

@@ -37,9 +37,9 @@ int main() {
             generateRandomMatrix(&(h_filter[i*k*k]), k, k, 50, false);
         }
     
-        h_output1 = convolution(h_input, m, n, c, h_filter, k, "default");
+        h_output1 = convolution(h_input, m, n, c, h_filter, k, "default", false, 1, 0, true);
 
-        h_output2 = convolution(h_input, m, n, c, h_filter, k, "shared");
+        h_output2 = convolution(h_input, m, n, c, h_filter, k, "shared", false, 1, 0, true);
         
         bool v =true;
         int out_h = m - k + 1;

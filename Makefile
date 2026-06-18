@@ -16,7 +16,7 @@ main_mat_mul.exe: $(SRC_DIR)/main_mat_mul.cu $(OP_DIR)/mat_mul.cu
 tests_mat_mut.exe: $(SRC_DIR)/tests_mat_mut.cu $(OP_DIR)/mat_mul.cu
 	$(NVCC) $(NVCC_FLAGS) -o $(OUT_DIR)/$@ $^ $(UTILS)
 
-test_convolution.exe: $(SRC_DIR)/test_convolution.cu $(OP_DIR)/convolution.cu
+test_convolution.exe: $(SRC_DIR)/test_convolution.cu $(OP_DIR)/convolution.cu $(OP_DIR)/mat_mul.cu
 	$(NVCC) $(NVCC_FLAGS) -o $(OUT_DIR)/$@ $^ $(UTILS)
 
 clean:
