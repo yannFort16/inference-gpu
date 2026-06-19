@@ -39,37 +39,31 @@ __global__ void convolution_default(float* input, int c, int m, int n,
 
 __global__ void patch_mat1 (float* input, int c, int m, int n, float *output, int k, int s,
                             int nb_patch_w, int nb_patch_h){
-    /* Each thread represents a patch of the matrix and put the content of the patch in the output.
+    /* Each thread represents a patch of the matrix and puts the content of the patch in the output.
     c -> number of channels
     m -> number of rows in the input
     n -> number of columns in the input
     k -> kernel height and width
     s -> stride
     dim(input) = (c, m, n)
-    dim(output) = (c, nb_patch, k)
+    dim(output) = (c, nb_patch, k*k)
     output is in row major because it is better for coalescing memory accesses
-
     */
 
-
-    const int patch_row = blockIdx.x * blockDim.x + threadIdx.x;
-    const int patch_col = blockIdx.y * blockDim.y + threadIdx.y;
+    const int patch_row = blockIdx.y * blockDim.y + threadIdx.y;
+    const int patch_col = blockIdx.x * blockDim.x + threadIdx.x;
     const int channel = threadIdx.z;
 
     int input_offset = channel * m * n;
-
     const int patch_id = patch_row * nb_patch_w + patch_col;
 
     if (patch_row < nb_patch_h && patch_col < nb_patch_w && channel < c){
-        
-        for (int i = 0; i<k; i++){
-            for (int j = 0; j<k; j++){
-                int pos_in_patch = i*k+j;
-
+        for (int i = 0; i < k; i++){
+            for (int j = 0; j < k; j++){
+                int pos_in_patch = i * k + j;
                 int global_row = patch_row * s + i;
                 int global_col = patch_col * s + j;
-
-                output[input_offset + patch_id * k * k + pos_in_patch] = input[input_offset + global_row*n+global_col];
+                output[input_offset + patch_id * k * k + pos_in_patch] = input[input_offset + global_row * n + global_col];
             }
         }
     }
@@ -81,20 +75,22 @@ __global__ void patch_mat3(float* input, int c, int m, int n, float *output, int
     Each theards represents one element from the patch matrix. They get the corresponding element
     from the input matrix and put it in the output patch matrix.
     */
-    const int elem_row = blockIdx.x * blockDim.x + threadIdx.x; // Which Element in the patch
-    const int elem_col = blockIdx.y * blockDim.y + threadIdx.y; // Which Patch 
-    //const int channel = TODO                       
+    const int patch_id = blockIdx.x * blockDim.x + threadIdx.x; // Which Pathc
+    const int kernel_elem = blockIdx.y * blockDim.y + threadIdx.y; //Which Element in the patch
+    const int channel = blockIdx.z;                       
     
-    int patch_row = elem_col/nb_patch_w;
-    int patch_col = elem_col%nb_patch_w;
+    int patch_row = kernel_elem/nb_patch_w;
+    int patch_col = kernel_elem%nb_patch_w;
+    int tot_nb_patch = nb_patch_w*nb_patch_h;
 
-    int kernel_row = elem_row/k;
-    int kernel_col = elem_row%k;
+    int kernel_row = patch_id/k;
+    int kernel_col = patch_id%k;
 
     int global_row = patch_row * s + kernel_row;
     int global_col = patch_col * s + kernel_col;
 
-    output[elem_row*nb_patch_w + elem_col] = input[global_row * n + global_col];
+    output[channel*(k*k)*tot_nb_patch + patch_id*tot_nb_patch + kernel_elem] = 
+            input[channel*m*n + global_row * n + global_col];
 
     //TODO Matix Multiplication With the kernel
 }
@@ -229,32 +225,32 @@ float* convolution(float *input, int m, int n, int c, float *filter, int k,
         cudaEventRecord(afterD2H);
         
     }else if (strcmp(methode, "split") == 0){
-        //Use kernel to build a patch matrix. Use existing matrix_multiplication from mat_mul.cu
+        // Build a patch matrix and compute per-channel convolution as a matrix multiplication.
         int nb_patches = nb_patch_h * nb_patch_w;
         size_t bytes_patch_mat = c * nb_patches * k * k * sizeof(float);
         float* patch_mat = (float*)malloc(bytes_patch_mat);
         float* d_patch_mat;
         cudaMalloc((void**)&d_patch_mat, bytes_patch_mat);
 
+        dim3 gridPatch((nb_patches + BLOCK_SIZE - 1) / BLOCK_SIZE,
+               ((k*k) + BLOCK_SIZE - 1) / BLOCK_SIZE,
+               c);
+
         cudaEventRecord(afterH2D);
-        //Build Patch Matrix
-        patch_mat3<<<grid, block>>>(d_input, c, m, n, d_patch_mat, k, stride, nb_patch_w, nb_patch_h);
+        patch_mat3<<<gridPatch, block>>>(d_input, c, m, n, d_patch_mat, k, stride, nb_patch_w, nb_patch_h);
         cudaEventRecord(afterKernel);
 
-        // Copy patch matrix from device to host
         cudaMemcpy(patch_mat, d_patch_mat, bytes_patch_mat, cudaMemcpyDeviceToHost);
         cudaFree(d_patch_mat);
-        
-        // Flatten Kernel - concatenate all kernels for all channels
-        size_t bytes_flat_kernel = c * k * k * sizeof(float);
-        float* flat_kernel = (float*)malloc(bytes_flat_kernel);
-        memcpy(flat_kernel, filter, bytes_flat_kernel);
-        
-        // Matrix Multiplication: flat_kernel (1 x c*k*k) @ patch_mat (c*k*k x nb_patches)
-        // Result: output (1 x nb_patches), then reshape to (nb_patch_h x nb_patch_w)
-        matrix_multiplication(flat_kernel, patch_mat, output, 1, nb_patches, c * k * k, "sharedM", false);
-        
-        free(flat_kernel);
+
+        for (int channel = 0; channel < c; channel++) {
+            float* channel_filter = filter + channel * k * k;
+            float* channel_patch_mat = patch_mat + channel * nb_patches * k * k;
+            float* channel_output = output + channel * nb_patches;
+            matrix_multiplication(channel_filter, channel_patch_mat, channel_output,
+                                  1, nb_patches, k * k, "sharedM", false);
+        }
+
         free(patch_mat);
         cudaEventRecord(afterD2H);
 
