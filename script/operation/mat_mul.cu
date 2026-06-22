@@ -19,7 +19,7 @@ __global__ void point(float *A, float * B, float * C,
                         float alpha, float beta, 
                         int m, int n, int k ){
     /*
-    Kernel for simple general matrix multiplication.
+    Kernel for simple general matrix multiplication. Each thread computes one element from the output.
     input : matrix A of floats size (m,k), matrix B of floats size (k,n), matrix C of floats size (m,n) to store the result of (alpha * C) + beta * (A@B)
     */
     const int row = blockIdx.x * blockDim.x + threadIdx.x;

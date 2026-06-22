@@ -79,17 +79,20 @@ __global__ void patch_mat3(float* input, int c, int m, int n, float *output, int
     const int kernel_elem = blockIdx.y * blockDim.y + threadIdx.y; //Which Element in the patch
     const int channel = blockIdx.z;                       
     
-    int patch_row = kernel_elem/nb_patch_w;
-    int patch_col = kernel_elem%nb_patch_w;
+    int patch_row = patch_id/nb_patch_w;
+    int patch_col = patch_id%nb_patch_w;
     int tot_nb_patch = nb_patch_w*nb_patch_h;
 
-    int kernel_row = patch_id/k;
-    int kernel_col = patch_id%k;
+    if (patch_id >= tot_nb_patch || kernel_elem >= k*k)
+        return;
+
+    int kernel_row = kernel_elem/k;
+    int kernel_col = kernel_elem%k;
 
     int global_row = patch_row * s + kernel_row;
     int global_col = patch_col * s + kernel_col;
 
-    output[channel*(k*k)*tot_nb_patch + patch_id*tot_nb_patch + kernel_elem] = 
+    output[channel*(k*k)*tot_nb_patch + kernel_elem*tot_nb_patch + patch_id] = 
             input[channel*m*n + global_row * n + global_col];
 
     //TODO Matix Multiplication With the kernel
@@ -240,9 +243,11 @@ float* convolution(float *input, int m, int n, int c, float *filter, int k,
         patch_mat3<<<gridPatch, block>>>(d_input, c, m, n, d_patch_mat, k, stride, nb_patch_w, nb_patch_h);
         cudaEventRecord(afterKernel);
 
+        
         cudaMemcpy(patch_mat, d_patch_mat, bytes_patch_mat, cudaMemcpyDeviceToHost);
         cudaFree(d_patch_mat);
 
+        //Matrix multiplication
         for (int channel = 0; channel < c; channel++) {
             float* channel_filter = filter + channel * k * k;
             float* channel_patch_mat = patch_mat + channel * nb_patches * k * k;
