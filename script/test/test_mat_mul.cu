@@ -43,10 +43,18 @@ int main() {
         generateRandomMatrix(h_A, m, k, 50, false);
         generateRandomMatrix(h_B, k, n, 50, false);
     
-        matrix_multiplication(h_A, h_B, h_C1, m, n, k, "default", true);
-        
-        matrix_multiplication(h_A, h_B, h_C2, m, n, k, "sharedM", true);
-    
+        int res = matrix_multiplication(h_A, h_B, h_C1, m, n, k, "cuBLAS", true);
+        if (res != 0) {
+            printf("Matrix Multiplication failed with return code %d\n", res);
+            continue;
+        }
+
+        res = matrix_multiplication(h_A, h_B, h_C2, m, n, k, "default", true);
+        if (res != 0) {
+            printf("Matrix Multiplication failed with return code %d\n", res);
+            continue;
+        }
+
         bool v = compare_matrix(h_C1, h_C2, m, n);
 
         if (v) {

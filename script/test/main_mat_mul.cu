@@ -42,7 +42,7 @@ int main() {
     // Allocate device memory and copy data
     printf("\nAllocating device memory and copying data...\n");
 
-    matrix_multiplication(h_A, h_B, h_C, m, n, k, "sharedM");
+    matrix_multiplication(h_A, h_B, h_C, m, n, k, "cuBLAS");
     
     // Print results
     printf("\nResult matrix C sample:\n");

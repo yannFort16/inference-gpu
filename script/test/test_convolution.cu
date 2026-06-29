@@ -39,7 +39,7 @@ int main() {
     
         h_output1 = convolution(h_input, m, n, c, h_filter, k, "default", false, 1, 0, true);
 
-        h_output2 = convolution(h_input, m, n, c, h_filter, k, "split", false, 1, 0, true);
+        h_output2 = convolution(h_input, m, n, c, h_filter, k, "ref", false, 1, 0, true);
         
         bool v =true;
         int out_h = m - k + 1;

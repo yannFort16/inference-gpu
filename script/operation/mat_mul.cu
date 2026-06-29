@@ -1,5 +1,9 @@
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h> 
+#include <cuda_runtime.h>
+#include "cublas_v2.h"
+
 
 #include "../header/mat_mul.h"
 
@@ -257,23 +261,15 @@ __global__ void streamK_point(float *A, float * B, float * C,
 }
 
 
-void print_performance(float h2d_ms, float kernel_ms, float d2h_ms, float total_ms){
-    printf("  CUDA total (ms)\t|  Comput. Kernel(ms)\t|  Data trans. H->D(ms)\t|  Data trans. D->H(ms)\t|\n");
-    printf("  %.5f\t\t|  %.5f\t\t|  %.5f\t\t|  %.5f\t\t|\n", total_ms, kernel_ms, h2d_ms, d2h_ms);
+void print_performance(float h2d_ms, float kernel_ms, float d2h_ms, float total_ms, char* methode){
+    printf("\t\t  CUDA total (ms)\t|  Comput. Kernel(ms)\t|  Data trans. H->D(ms)\t|  Data trans. D->H(ms)\t|\n");
+    printf("%s ->\t  %.5f\t\t|  %.5f\t\t|  %.5f\t\t|  %.5f\t\t|\n\n", methode, total_ms, kernel_ms, h2d_ms, d2h_ms);
 }
 
 int matrix_multiplication (float * A, float * B, float* C,
                             int m, int n, int k, char* methode, 
                             bool perf, float alpha, float beta){
-    /*General Matrix Multiplication using parallele compluting.
-        Compute (alpha * C) + beta * (A@B)
-
-    A = (m, k)  |  B = (k, n)  | C = (m, n)
-    Mehodes :
-        - default => simple no optimization
-        - sharedM => unsing shared memory + transposed B matrix
-        - streamK => tile decomposition (NOT Working)
-    */
+    
 
     int gridDimX = (m + BLOCK_SIZE - 1) / BLOCK_SIZE;
     int gridDimY = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
@@ -283,14 +279,6 @@ int matrix_multiplication (float * A, float * B, float* C,
     dim3 blockDimShared(BLOCK_SIZE / THREAD_TILE, BLOCK_SIZE / THREAD_TILE);
     dim3 gridDim(gridDimX, gridDimY);
 
-
-    float *d_A;
-    float *d_B;
-    float *d_C;
-
-    size_t bytes_A = m * k * sizeof(float);
-    size_t bytes_B = k * n * sizeof(float);
-    size_t bytes_C = m * n * sizeof(float);
     
     // Events for CUDA timing
     cudaEvent_t start, afterH2D, afterKernel, afterD2H;
@@ -299,17 +287,34 @@ int matrix_multiplication (float * A, float * B, float* C,
     cudaEventCreate(&afterKernel);
     cudaEventCreate(&afterD2H);
 
+    float *d_A;
+    float *d_B;
+    float *d_C;
+
+    size_t bytes_A = m * k * sizeof(float);
+    size_t bytes_B = k * n * sizeof(float);
+    size_t bytes_C = m * n * sizeof(float);
+
+
     // Allocate device memory
     cudaMalloc((void**)&d_A, bytes_A);
     cudaMalloc((void**)&d_B, bytes_B);
     cudaMalloc((void**)&d_C, bytes_C);
-
-    // Host to Device
+    
+    //Create Handle:
+    cublasStatus_t stat;
+    cublasHandle_t handle;
+    
+    stat = cublasCreate(&handle);
+    if (stat != CUBLAS_STATUS_SUCCESS) {
+        printf ("CUBLAS initialization failed (code %d)\n", stat);
+        return EXIT_FAILURE;
+    }
     cudaEventRecord(start);
+    // Host to Device
     cudaMemcpy(d_A, A, bytes_A, cudaMemcpyHostToDevice);
     cudaMemcpy(d_B, B, bytes_B, cudaMemcpyHostToDevice);
     cudaMemcpy(d_C, C, bytes_C, cudaMemcpyHostToDevice);
-    
 
     // Launch kernel
     if (strcmp(methode, "default") == 0){
@@ -339,11 +344,17 @@ int matrix_multiplication (float * A, float * B, float* C,
 
         cudaFree(flags);
         cudaFree(partials);
+    }else if (strcmp(methode, "cuBLAS") == 0){
+        cudaEventRecord(afterH2D);
+        cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, &beta, d_B, n, d_A, k, &alpha, d_C, n);
+        cudaDeviceSynchronize();
+        cudaEventRecord(afterKernel); 
     }else{
         cudaFree(d_A);
         cudaFree(d_B);
         cudaFree(d_C);
-        return 1;
+        cublasDestroy(handle);
+        return EXIT_FAILURE;
     }
     
     //printf("Kernel execution completed!\n");
@@ -356,13 +367,20 @@ int matrix_multiplication (float * A, float * B, float* C,
     cudaFree(d_A);
     cudaFree(d_B);
     cudaFree(d_C);
+    cublasDestroy(handle);
+    
+    
 
-    float h2d_ms, kernel_ms, d2h_ms, total_ms;
-    cudaEventElapsedTime(&h2d_ms, start, afterH2D);
-    cudaEventElapsedTime(&kernel_ms, afterH2D, afterKernel);
-    cudaEventElapsedTime(&d2h_ms, afterKernel, afterD2H);
-    cudaEventElapsedTime(&total_ms, start, afterD2H);
+    if (perf){
+        float h2d_ms, kernel_ms, d2h_ms, total_ms;
+        cudaEventElapsedTime(&h2d_ms, start, afterH2D);
+        cudaEventElapsedTime(&kernel_ms, afterH2D, afterKernel);
+        cudaEventElapsedTime(&d2h_ms, afterKernel, afterD2H);
+        cudaEventElapsedTime(&total_ms, start, afterD2H);
+        print_performance(h2d_ms, kernel_ms, d2h_ms, total_ms, methode);
+    } 
 
-    if (perf) print_performance(h2d_ms, kernel_ms, d2h_ms, total_ms);
     return 0;
 }
+
+

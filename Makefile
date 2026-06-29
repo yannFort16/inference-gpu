@@ -6,18 +6,20 @@ SRC_DIR     := script/test
 OP_DIR      := script/operation
 OUT_DIR     := exec
 UTILS		:= script/test/utils.cu
+LDFLAGS = -L"$(CUDA_PATH)/lib/x64"
+CUDA_PATH	:= C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.2
 .PHONY: all clean
 
-all: main_mat_mul.exe tests_mat_mut.exe test_convolution.exe
+all: main_mat_mul.exe test_mat_mul.exe test_convolution.exe
 
 main_mat_mul.exe: $(SRC_DIR)/main_mat_mul.cu $(OP_DIR)/mat_mul.cu
-	$(NVCC) $(NVCC_FLAGS) -o $(OUT_DIR)/$@ $^ $(UTILS)
+	$(NVCC) $(NVCC_FLAGS) -o $(OUT_DIR)/$@ $^ $(UTILS) $(LDFLAGS) -lcublas
 
-tests_mat_mut.exe: $(SRC_DIR)/tests_mat_mut.cu $(OP_DIR)/mat_mul.cu
-	$(NVCC) $(NVCC_FLAGS) -o $(OUT_DIR)/$@ $^ $(UTILS)
+test_mat_mul.exe: $(SRC_DIR)/test_mat_mul.cu $(OP_DIR)/mat_mul.cu
+	$(NVCC) $(NVCC_FLAGS) -o $(OUT_DIR)/$@ $^ $(UTILS) $(LDFLAGS) -lcublas
 
 test_convolution.exe: $(SRC_DIR)/test_convolution.cu $(OP_DIR)/convolution.cu $(OP_DIR)/mat_mul.cu
-	$(NVCC) $(NVCC_FLAGS) -o $(OUT_DIR)/$@ $^ $(UTILS)
+	$(NVCC) $(NVCC_FLAGS) -o $(OUT_DIR)/$@ $^ $(UTILS) $(LDFLAGS) -lcublas
 
 clean:
-	rm -f $(OUT_DIR)/main_mat_mul.exe $(OUT_DIR)/tests_mat_mut.exe $(OUT_DIR)/test_convolution.exe
+	rm -f $(OUT_DIR)/main_mat_mul.exe $(OUT_DIR)/test_mat_mul.exe $(OUT_DIR)/test_convolution.exe

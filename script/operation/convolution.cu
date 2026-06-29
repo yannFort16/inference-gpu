@@ -1,20 +1,27 @@
 #include <stdio.h>
+#include <stdlib.h>
+#include <cuda_runtime.h>
+#include "cublas_v2.h"
 #include "../header/mat_mul.h"
 
-#define BLOCK_SIZE 8
+#define BLOCK_SIZE 16
+#define MAX_FILTER_SIZE 16384
 
-__device__ float mat_mul_patch(float* input, float* kernel, int k, int n){
+__constant__ float const_filter[MAX_FILTER_SIZE]; 
+
+__device__ float mat_mul_patch(float* input, float* filter, int k, int n, bool use_const_filter){
+    float* const_filter_ptr = use_const_filter ? const_filter : filter;
     float s = 0.0;
     for(int i = 0; i<k; i++){
         for (int j = 0; j < k; j++){
-            s+=input[i*n+j] * kernel[i*k+j];
+            s+=input[i*n+j] * const_filter_ptr[i*k+j];
         }
     }
     return s;
 }
 
 __global__ void convolution_default(float* input, int c, int m, int n,
-                             float* kernel, int k, int stride,
+                             float* filter, int k, int stride,
                              float* output, int nb_patch_w, int nb_patch_h){
     /*
     Simple convolution that is not optimised. Used for referance.
@@ -31,9 +38,11 @@ __global__ void convolution_default(float* input, int c, int m, int n,
     const int input_offset = channel * m * n;
     const int output_offset = channel * nb_patch_w * nb_patch_h; 
     
+    bool use_const_filter = (k*k*c < MAX_FILTER_SIZE);
+
     output[output_offset + patch_row*nb_patch_w+patch_col] = 
         mat_mul_patch(&(input[input_offset + patch_row * stride * n + patch_col * stride]),
-         &(kernel[channel * k * k]), k, n);
+          filter, k, n, use_const_filter);
 
 }
 
@@ -99,8 +108,8 @@ __global__ void patch_mat3(float* input, int c, int m, int n, float *output, int
 }
 
 
-__global__ void convolution_shared(float* input, int c, int m, int n, float *output, int k, 
-                            float* filter, int s, int nb_patch_w, int nb_patch_h){
+__global__ void convolution_shared(float* input, int c, int m, int n, float *output, float* filter,
+                                 int k, int s, int nb_patch_w, int nb_patch_h){
     /*
         Convolution where each thread represents an element of the output matrix. They each
         compute the elment they corespond to. First by loading the input in the shared memory then 
@@ -130,7 +139,9 @@ __global__ void convolution_shared(float* input, int c, int m, int n, float *out
     const int channel_input_offset = channel * m * n;
     const int channel_output_offset = channel * nb_patch_w * nb_patch_h;
     const int channel_filter_offset = channel * k * k;
-
+    
+    float* const_filter_ptr = c * k * k < MAX_FILTER_SIZE ? const_filter : filter;
+    
     //Load tile :
     const int tile_size = (BLOCK_SIZE + k-1); 
     for (int i = threadIdx.x; i<tile_size; i+=BLOCK_SIZE){
@@ -145,6 +156,9 @@ __global__ void convolution_shared(float* input, int c, int m, int n, float *out
         }    
     }
 
+    //Coalesced memory load :
+    //TODO
+
     __syncthreads();
     if (patch_col >= nb_patch_w || patch_row >= nb_patch_h || channel >= c) {
         return;
@@ -154,7 +168,7 @@ __global__ void convolution_shared(float* input, int c, int m, int n, float *out
 
     for(int i=0; i<k; i++){
         for(int j=0; j<k; j++){
-            sum += tile[(ty+i)* tile_size + tx +j]*filter[channel_filter_offset + i*k + j];
+            sum += tile[(ty+i)* tile_size + tx +j]*const_filter_ptr[channel_filter_offset + i*k + j];
         }
     }
     
@@ -175,6 +189,8 @@ float* convolution(float *input, int m, int n, int c, float *filter, int k,
     int nb_patch_w = (n - (k-1) + stride - 1) / stride;
     int nb_patch_h = (m - (k-1) + stride - 1) / stride;
     //int tot_nb_patch = nb_patch_h*nb_patch_w;
+
+    bool use_const_filter = (k*k*c < MAX_FILTER_SIZE);
 
     dim3 block(BLOCK_SIZE, BLOCK_SIZE, 1);
     dim3 grid((nb_patch_w + BLOCK_SIZE - 1) / BLOCK_SIZE,
@@ -205,7 +221,11 @@ float* convolution(float *input, int m, int n, int c, float *filter, int k,
 
     cudaEventRecord(start);
     cudaMemcpy(d_input, input, bytes_input, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_filter, filter, bytes_filter, cudaMemcpyHostToDevice);
+    if(use_const_filter && (strcmp(methode, "ref") == 0 || strcmp(methode, "default") == 0)){
+        cudaMemcpyToSymbol(const_filter, filter, bytes_filter);
+    }else{
+        cudaMemcpy(d_filter, filter, bytes_filter, cudaMemcpyHostToDevice);
+    }
     
 
     if(strcmp(methode, "default") == 0){
@@ -220,14 +240,15 @@ float* convolution(float *input, int m, int n, int c, float *filter, int k,
         size_t shared_bytes = (BLOCK_SIZE + k-1)*(BLOCK_SIZE + k-1)*sizeof(float);
 
         cudaEventRecord(afterH2D);
-        convolution_shared<<<grid, block, shared_bytes>>>(d_input, c,  m,  n, d_output, k, 
-                            d_filter, stride, nb_patch_w, nb_patch_h);
+        convolution_shared<<<grid, block, shared_bytes>>>(d_input, c,  m,  n, d_output, d_filter, k, 
+                             stride, nb_patch_w, nb_patch_h);
         cudaEventRecord(afterKernel);
 
         cudaMemcpy(output, d_output, bytes_output, cudaMemcpyDeviceToHost);
         cudaEventRecord(afterD2H);
         
-    }else if (strcmp(methode, "split") == 0){
+    }else if (strcmp(methode, "split") == 0 || strcmp(methode, "ref") == 0){
+        
         // Build a patch matrix and compute per-channel convolution as a matrix multiplication.
         int nb_patches = nb_patch_h * nb_patch_w;
         size_t bytes_patch_mat = c * nb_patches * k * k * sizeof(float);
@@ -247,18 +268,37 @@ float* convolution(float *input, int m, int n, int c, float *filter, int k,
         cudaMemcpy(patch_mat, d_patch_mat, bytes_patch_mat, cudaMemcpyDeviceToHost);
         cudaFree(d_patch_mat);
 
+        bool is_ref = (strcmp(methode, "ref") == 0);
+        cublasStatus_t stat;
+        cublasHandle_t handle;
+        if(is_ref){
+            stat = cublasCreate(&handle);
+            if (stat != CUBLAS_STATUS_SUCCESS) {
+                printf ("CUBLAS initialization failed (code %d)\n", stat);
+                exit(1);
+            }
+        }
         //Matrix multiplication
         for (int channel = 0; channel < c; channel++) {
             float* channel_filter = filter + channel * k * k;
             float* channel_patch_mat = patch_mat + channel * nb_patches * k * k;
             float* channel_output = output + channel * nb_patches;
+            if (is_ref){
             matrix_multiplication(channel_filter, channel_patch_mat, channel_output,
                                   1, nb_patches, k * k, "sharedM", false);
+        
+            } else {          
+                float alpha = 1;
+                float beta = 0;   
+                cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, &alpha, d_filter, n, d_patch_mat, k, &beta, d_output, n);
+                cudaDeviceSynchronize();
+            }
         }
-
         free(patch_mat);
         cudaEventRecord(afterD2H);
-
+        if (is_ref) {
+            cublasDestroy(handle);
+        }
     }else{
         cudaFree(d_input);
         cudaFree(d_output);
@@ -275,7 +315,7 @@ float* convolution(float *input, int m, int n, int c, float *filter, int k,
         cudaEventElapsedTime(&d2h_ms, afterKernel, afterD2H);
         cudaEventElapsedTime(&total_ms, start, afterD2H);
 
-        print_performance(h2d_ms, kernel_ms, d2h_ms, total_ms);
+        print_performance(h2d_ms, kernel_ms, d2h_ms, total_ms, methode);
     }
 
     cudaFree(d_input);
