@@ -310,6 +310,7 @@ int matrix_multiplication (float * A, float * B, float* C,
         printf ("CUBLAS initialization failed (code %d)\n", stat);
         return EXIT_FAILURE;
     }
+    
     cudaEventRecord(start);
     // Host to Device
     cudaMemcpy(d_A, A, bytes_A, cudaMemcpyHostToDevice);
