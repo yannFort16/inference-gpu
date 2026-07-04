@@ -8,6 +8,10 @@ int main() {
     
     const int nb_tests = 3; 
 
+    const bool pad = true;
+    const float pad_val = 0.0;
+    const int stride = 1;
+
     int test[nb_tests][4] = {
         {1080, 1920, 3, 3},
         {256, 256, 1, 5},
@@ -22,6 +26,9 @@ int main() {
         printf("Test with Input dimensions (%d, %d, %d) and kernel (%d, %d, %d)\n",
              c, m, n, c, k, k);
 
+        if(pad){
+            printf("padding enabled\n");
+        }
         // Allocate host memory
         size_t bytes_input = c* m * n * sizeof(float);
         size_t bytes_filter = c * k * k * sizeof(float);
@@ -37,13 +44,14 @@ int main() {
             generateRandomMatrix(&(h_filter[i*k*k]), k, k, 50, false);
         }
     
-        h_output1 = convolution(h_input, m, n, c, h_filter, k, "default", false, 1, 0, true);
 
-        h_output2 = convolution(h_input, m, n, c, h_filter, k, "ref", false, 1, 0, true);
+        h_output1 = convolution(h_input, m, n, c, h_filter, k, "default", false, stride, pad_val, pad);
+
+        h_output2 = convolution(h_input, m, n, c, h_filter, k, "shared", false, stride, pad_val, pad);
         
-        bool v =true;
-        int out_h = m - k + 1;
-        int out_w = n - k + 1;
+        bool v = true;
+        int out_h = (pad ? m - k + 1 : m)/stride;
+        int out_w = (pad ? n - k + 1 : n)/stride;
         int channel_size = out_h * out_w;
         for (int i = 0; i < c; i++) {
             v = v && compare_matrix(

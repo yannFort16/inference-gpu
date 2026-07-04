@@ -9,12 +9,22 @@
 
 __constant__ float const_filter[MAX_FILTER_SIZE]; 
 
-__device__ float mat_mul_patch(float* input, float* filter, int k, int n, bool use_const_filter){
+__device__ float mat_mul_patch(float* input, float* filter, int k, int n, int m,
+                              int start_row, int start_col, bool use_const_filter,
+                              bool pad, float pad_val) {
     float* const_filter_ptr = use_const_filter ? const_filter : filter;
     float s = 0.0;
-    for(int i = 0; i<k; i++){
-        for (int j = 0; j < k; j++){
-            s+=input[i*n+j] * const_filter_ptr[i*k+j];
+    for (int i = 0; i < k; i++) {
+        for (int j = 0; j < k; j++) {
+            int row = start_row + i;
+            int col = start_col + j;
+            float input_val;
+            if (pad && (row < 0 || row >= m || col < 0 || col >= n)) {
+                input_val = pad_val;
+            } else {
+                input_val = input[row * n + col];
+            }
+            s += input_val * const_filter_ptr[i * k + j];
         }
     }
     return s;
@@ -22,7 +32,7 @@ __device__ float mat_mul_patch(float* input, float* filter, int k, int n, bool u
 
 __global__ void convolution_default(float* input, int c, int m, int n,
                              float* filter, int k, int stride,
-                             float* output, int nb_patch_w, int nb_patch_h){
+                             float* output, int nb_patch_w, int nb_patch_h, bool pad, float pad_val){
     /*
     Simple convolution that is not optimised. Used for referance.
     */
@@ -39,10 +49,12 @@ __global__ void convolution_default(float* input, int c, int m, int n,
     const int output_offset = channel * nb_patch_w * nb_patch_h; 
     
     bool use_const_filter = (k*k*c < MAX_FILTER_SIZE);
+    int start_row = patch_row * stride - (pad ? (k - 1) / 2 : 0);
+    int start_col = patch_col * stride - (pad ? (k - 1) / 2 : 0);
 
     output[output_offset + patch_row*nb_patch_w+patch_col] = 
-        mat_mul_patch(&(input[input_offset + patch_row * stride * n + patch_col * stride]),
-          filter, k, n, use_const_filter);
+        mat_mul_patch(input + input_offset, filter, k, n, m,
+          start_row, start_col, use_const_filter, pad, pad_val);
 
 }
 
@@ -109,12 +121,14 @@ __global__ void patch_mat3(float* input, int c, int m, int n, float *output, int
 
 
 __global__ void convolution_shared(float* input, int c, int m, int n, float *output, float* filter,
-                                 int k, int s, int nb_patch_w, int nb_patch_h){
+                                 int k, int s, int nb_patch_w, int nb_patch_h, bool padding, float pad_val){
     /*
         Convolution where each thread represents an element of the output matrix. They each
         compute the elment they corespond to. First by loading the input in the shared memory then 
         by computing. 
 
+        Added padding option to the convolution. If padding is true, the input will be padded with pad_val.
+        Works only for k odd.
     */
     extern __shared__ float tile[];
 
@@ -143,15 +157,17 @@ __global__ void convolution_shared(float* input, int c, int m, int n, float *out
     float* const_filter_ptr = c * k * k < MAX_FILTER_SIZE ? const_filter : filter;
     
     //Load tile :
-    const int tile_size = (BLOCK_SIZE + k-1); 
-    for (int i = threadIdx.x; i<tile_size; i+=BLOCK_SIZE){
-        int global_row = input_row + i;
-        for (int j = threadIdx.y; j<tile_size; j+=BLOCK_SIZE){
-            int global_col = input_col + j;
-            if (global_col<n && global_row<m){
-                tile[i * tile_size + j] = input[channel_input_offset + global_row * n + global_col];
+    const int tile_size = (BLOCK_SIZE * s + k-1); 
+    for (int row = threadIdx.y; row<tile_size; row+=BLOCK_SIZE){
+        int global_row = padding ? input_row + row - (k - 1)/2 : input_row + row;
+        
+        for (int col = threadIdx.x; col<tile_size; col+=BLOCK_SIZE){
+            int global_col = padding ? input_col + col - (k - 1)/2 : input_col + col;
+        
+            if (global_col<n && global_row<m && global_col>=0 && global_row>=0){
+                tile[row * tile_size + col] = input[channel_input_offset + global_row * n + global_col];
             }else{
-                tile[i * tile_size + j] = 0.0;
+                tile[row * tile_size + col] = pad_val;
             }
         }    
     }
@@ -168,7 +184,7 @@ __global__ void convolution_shared(float* input, int c, int m, int n, float *out
 
     for(int i=0; i<k; i++){
         for(int j=0; j<k; j++){
-            sum += tile[(ty+i)* tile_size + tx +j]*const_filter_ptr[channel_filter_offset + i*k + j];
+            sum += tile[(ty*s+i)* tile_size + tx*s +j]*const_filter_ptr[channel_filter_offset + i*k + j];
         }
     }
     
@@ -177,7 +193,7 @@ __global__ void convolution_shared(float* input, int c, int m, int n, float *out
 
 
 float* convolution(float *input, int m, int n, int c, float *filter, int k,
-                char* methode, bool pad, int stride, int pad_val, bool perf){
+                char* methode, bool pad, int stride, float pad_val, bool perf){
 /* input : input data composed of 2D array over the c chanels
    dim(input) = (c, m, n)
    
@@ -185,9 +201,12 @@ float* convolution(float *input, int m, int n, int c, float *filter, int k,
    dim(kernel) = (c, k, k)
 
    if pad is true, the padding will be composed of pad_val
-*/    
-    int nb_patch_w = (n - (k-1) + stride - 1) / stride;
-    int nb_patch_h = (m - (k-1) + stride - 1) / stride;
+*/  
+    int dim_m = pad ? m + k -1 : m;
+    int dim_n = pad ? n + k -1 : n;
+
+    int nb_patch_w = (dim_n - (k-1) + stride - 1) / stride;
+    int nb_patch_h = (dim_m - (k-1) + stride - 1) / stride;
     //int tot_nb_patch = nb_patch_h*nb_patch_w;
 
     bool use_const_filter = (k*k*c < MAX_FILTER_SIZE);
@@ -221,9 +240,9 @@ float* convolution(float *input, int m, int n, int c, float *filter, int k,
 
     cudaEventRecord(start);
     cudaMemcpy(d_input, input, bytes_input, cudaMemcpyHostToDevice);
-    if(use_const_filter && (strcmp(methode, "ref") == 0 || strcmp(methode, "default") == 0)){
+    if (use_const_filter) {
         cudaMemcpyToSymbol(const_filter, filter, bytes_filter);
-    }else{
+    } else {
         cudaMemcpy(d_filter, filter, bytes_filter, cudaMemcpyHostToDevice);
     }
     
@@ -231,7 +250,7 @@ float* convolution(float *input, int m, int n, int c, float *filter, int k,
     if(strcmp(methode, "default") == 0){
         cudaEventRecord(afterH2D);
         convolution_default<<<grid, block>>>(d_input, c, m, n, d_filter, k, stride, d_output,
-                                        nb_patch_w, nb_patch_h);
+                                        nb_patch_w, nb_patch_h, pad, pad_val);
         cudaEventRecord(afterKernel);
 
         cudaMemcpy(output, d_output, bytes_output, cudaMemcpyDeviceToHost);
@@ -241,7 +260,7 @@ float* convolution(float *input, int m, int n, int c, float *filter, int k,
 
         cudaEventRecord(afterH2D);
         convolution_shared<<<grid, block, shared_bytes>>>(d_input, c,  m,  n, d_output, d_filter, k, 
-                             stride, nb_patch_w, nb_patch_h);
+                             stride, nb_patch_w, nb_patch_h, pad, pad_val);
         cudaEventRecord(afterKernel);
 
         cudaMemcpy(output, d_output, bytes_output, cudaMemcpyDeviceToHost);

@@ -6,7 +6,7 @@
 #include "../header/utils.h"
 
 
-int main() {
+int validate_matrix_multiplication() {
     printf("===== Test CUDA Matrix Multiplication =====\n\n");
     
     const int nb_tests = 4; 
@@ -69,5 +69,62 @@ int main() {
         free(h_C2);
     }
     printf("Done!\n");
+    return 0;
+}
+
+int benchmark_matrix_multiplication() {
+    printf("===== Benchmark CUDA Matrix Multiplication =====\n\n");
+    
+    const int loop_count = 32; 
+
+    char* methods[2] = {"cuBLAS", "sharedM"};
+
+    int m = 64;
+    int n = 50176;
+    int k = 27;
+    printf("Benchmark with Matrix dimensions: A[%d x %d], B[%d x %d], C[%d x %d]\n", m, k, k, n, m, n);
+
+    // Allocate host memory
+    size_t bytes_A = m * k * sizeof(float);
+    size_t bytes_B = k * n * sizeof(float);
+    size_t bytes_C = m * n * sizeof(float);
+        
+    float *h_A = (float*)malloc(bytes_A);
+    float *h_B = (float*)malloc(bytes_B);
+    float *h_C = (float*)malloc(bytes_C);
+    
+    bool perf = false;
+    
+    for(int t = 0; t<loop_count; t++){    
+        generateRandomMatrix(h_A, m, k, 50, false);
+        generateRandomMatrix(h_B, k, n, 50, false);
+        
+        perf = (t == loop_count - 1);
+
+        int res = matrix_multiplication(h_A, h_B, h_C, m, n, k, methods[0], perf);
+        if (res != 0) {
+            printf("Matrix Multiplication %s failed with return code %d\n", methods[0], res);
+            continue;
+        }
+
+        res = matrix_multiplication(h_A, h_B, h_C, m, n, k, methods[1], perf);
+        if (res != 0) {
+            printf("Matrix Multiplication %s failed with return code %d\n", methods[1], res);
+            continue;
+        }
+
+        printf("%d/%d iterations completed\n", t+1, loop_count);
+    }
+
+    free(h_A);
+    free(h_B);
+    free(h_C);
+    printf("Done!\n");
+    return 0;
+}
+
+int main() {
+    //validate_matrix_multiplication();
+    benchmark_matrix_multiplication();
     return 0;
 }
