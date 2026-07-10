@@ -202,8 +202,8 @@ float* convolution(float *input, int m, int n, int c, float *filter, int k,
 
    if pad is true, the padding will be composed of pad_val
 */  
-    int dim_m = pad ? m + k -1 : m;
-    int dim_n = pad ? n + k -1 : n;
+    int dim_m = pad ? m + 2 * ((k - 1) / 2) : m;
+    int dim_n = pad ? n + 2 * ((k - 1) / 2) : n;
 
     int nb_patch_w = (dim_n - (k-1) + stride - 1) / stride;
     int nb_patch_h = (dim_m - (k-1) + stride - 1) / stride;
