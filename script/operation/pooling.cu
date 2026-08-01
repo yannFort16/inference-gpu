@@ -86,7 +86,7 @@ __global__ void pooling(float *input, float *output, int m, int n, int channels,
 }
 
 
-float * pooling(float *input, int m, int n, int channels, int k, int stride, 
+void pooling(float *input, float* output, int m, int n, int channels, int k, int stride, 
                 bool padding, float pad_val, char pooling_type) {
     /* 
     pooling_type is either : m for max || a for average
@@ -101,7 +101,7 @@ float * pooling(float *input, int m, int n, int channels, int k, int stride,
 
     if (pooling_type != 'm' && pooling_type != 'a') {
         fprintf(stderr, "Error: pooling_type must be either 'm' for max or 'a' for average.\n");
-        return NULL;
+        return;
     }
 
     int dim_m = padding ? m + 2 * ((k - 1) / 2) : m;
@@ -117,8 +117,6 @@ float * pooling(float *input, int m, int n, int channels, int k, int stride,
 
     size_t bytes_input = m*n*channels* sizeof(float);
     size_t bytes_output = nb_patch_w*nb_patch_h*channels*sizeof(float);
-
-    float* output = (float*)malloc(bytes_output);
 
     float *d_input;
     float *d_output;
@@ -138,5 +136,5 @@ float * pooling(float *input, int m, int n, int channels, int k, int stride,
     cudaFree(d_input);
     cudaFree(d_output);
 
-    return output;
+    return;
 }

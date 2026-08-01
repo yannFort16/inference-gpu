@@ -1,7 +1,7 @@
 #ifndef POOL_H
 #define POOL_H
 
-float * pooling(float *input, int m, int n, int channels, int k, int stride = 1, 
+void pooling(float *input, float* output, int m, int n, int channels, int k, int stride = 1, 
                 bool padding = false, float pad_val = 0.0, char pooling_type = 'm');
 /* 
     pooling_type is either : m for max || a for average

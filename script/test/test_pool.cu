@@ -17,6 +17,7 @@ int main() {
     // Allocate host memory
     size_t bytes_input = m * n * sizeof(float);
     float *h_input = (float*)malloc(bytes_input);
+    float *h_output = (float*)malloc(bytes_input); // Output size will be the same for simplicity
 
     printf("Generating random input matrix...\n");
     generateRandomMatrix(h_input, m, n, 10, true);
@@ -24,13 +25,13 @@ int main() {
     printf("Input matrix:\n");
     printMatrix(h_input, m, n, 6);
 
-    float* output = pooling(h_input, m, n, 1, k, 1, true, 0.0, 'm');
+   pooling(h_input, h_output, m, n, 1, k, 1, true, 0.0, 'm');
 
     printf("Pooling operation completed. Results:\n");
-    printMatrix(output, m, n, 6);
+    printMatrix(h_output, m, n, 6);
 
     free(h_input);
-    free(output);
+    free(h_output);
     printf("Done!\n");
     return 0;
 }

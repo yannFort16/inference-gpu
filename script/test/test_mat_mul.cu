@@ -67,7 +67,7 @@ int cublas_gemm(cublasHandle_t handle, float *A, float *B, float *C, int m, int 
     return 0;
 }
 
-int validate_matrix_multiplication() {
+int validate_matrix_multiplication(char* methode1, char* methode2) {
     printf("===== Test CUDA Matrix Multiplication =====\n\n");
     
     const int nb_tests = 4; 
@@ -104,15 +104,15 @@ int validate_matrix_multiplication() {
         generateRandomMatrix(h_A, m, k, 50, false);
         generateRandomMatrix(h_B, k, n, 50, false);
     
-        int res = matrix_multiplication(h_A, h_B, h_C1, m, n, k, "cuBLAS", true);
+        int res = matrix_multiplication(h_A, h_B, h_C1, m, n, k, methode1, true);
         if (res != 0) {
-            printf("Matrix Multiplication failed with return code %d\n", res);
+            printf("Matrix Multiplication %s failed with return code %d\n", methode1, res);
             continue;
         }
 
-        res = matrix_multiplication(h_A, h_B, h_C2, m, n, k, "default", true);
+        res = matrix_multiplication(h_A, h_B, h_C2, m, n, k, methode2, true);
         if (res != 0) {
-            printf("Matrix Multiplication failed with return code %d\n", res);
+            printf("Matrix Multiplication %s failed with return code %d\n", methode2, res);
             continue;
         }
 
@@ -133,12 +133,11 @@ int validate_matrix_multiplication() {
     return 0;
 }
 
-int benchmark_matrix_multiplication(int m, int n, int k) {
+int benchmark_matrix_multiplication(char* methode1, char* methode2, int m, int n, int k) {
     printf("===== Benchmark CUDA Matrix Multiplication =====\n\n");
     
     const int loop_count = 32; 
 
-    char* methods[2] = {"cuBLAS", "sharedM"};
 
     printf("Benchmark with Matrix dimensions: A[%d x %d], B[%d x %d], C[%d x %d]\n", m, k, k, n, m, n);
 
@@ -173,13 +172,13 @@ int benchmark_matrix_multiplication(int m, int n, int k) {
             
         int res = cublas_gemm(handle, h_A, h_B, h_C1, m, n, k, last_iter);
         if (res != 0) {
-            printf("Matrix Multiplication %s failed with return code %d\n", methods[0], res);
+            printf("Matrix Multiplication %s failed with return code %d\n", methode1, res);
             continue;
         }
 
-        res = matrix_multiplication(h_A, h_B, h_C2, m, n, k, methods[1], last_iter);
+        res = matrix_multiplication(h_A, h_B, h_C2, m, n, k, methode2, last_iter);
         if (res != 0) {
-            printf("Matrix Multiplication %s failed with return code %d\n", methods[1], res);
+            printf("Matrix Multiplication %s failed with return code %d\n", methode2, res);
             continue;
         }
 
@@ -198,28 +197,36 @@ int benchmark_matrix_multiplication(int m, int n, int k) {
     return 0;
 }
 
-int main() {
-    //validate_matrix_multiplication();
-
-    int m = 256;
-    int n = 3136;
-    int k = 2304;
-    
-    const int nb_tests = 4;
-
-    int test[nb_tests][3] = {
-        {64, 50176, 27},
-        {256, 3136, 2304},
-        {512, 784, 4608},
-        {128, 12544, 1152}
-    };
-    for(int t = 0; t<nb_tests; t++){
-        m = test[t][0];
-        n = test[t][1];
-        k = test[t][2];
-        
-        benchmark_matrix_multiplication(m, n, k);
+int main(int argc, char **argv) {
+    if (argc < 4) {
+        printf("Usage: %s <methode1> <methode2> <t || b>\n", argv[0]);
+        return 1;
     }
-    return 0;
+
+    if (strcmp(argv[3], "t") == 0) {
+        return validate_matrix_multiplication(argv[1], argv[2]);
+    } else if (strcmp(argv[3], "b") == 0) {
+        int m, n, k;
+        
+        const int nb_tests = 4;
+
+        int test[nb_tests][3] = {
+            {64, 50176, 27},
+            {256, 3136, 2304},
+            {512, 784, 4608},
+            {128, 12544, 1152}
+        };
+        for(int t = 0; t<nb_tests; t++){
+            m = test[t][0];
+            n = test[t][1];
+            k = test[t][2];
+            
+            benchmark_matrix_multiplication(argv[1], argv[2], m, n, k);
+        }
+        return 0;
+    } else {
+        printf("Invalid argument. Use 't' for test or 'b' for benchmark.\n");
+        return 1;
+    }
 }
 

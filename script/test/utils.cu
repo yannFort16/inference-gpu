@@ -104,3 +104,40 @@ bool compare_matrix(const float *mat1, const float *mat2, int rows, int cols) {
     return equal;
 }
 
+int read_matrix(char * filename, float* dest_matrix, int x, int y, int c) {
+    FILE* fp = fopen(filename, "rb");
+    if (fp == NULL) {
+        fprintf(stderr, "read_matrix: could not open file %s\n", filename);
+        return -1;
+    }
+
+    size_t num_elements = (size_t)x * y * c;
+    size_t read_count = fread(dest_matrix, sizeof(float), num_elements, fp);
+    fclose(fp);
+
+    if (read_count != num_elements) {
+        fprintf(stderr, "read_matrix: expected %zu elements, got %zu\n",
+                num_elements, read_count);
+        return -1;
+    }
+    return 0;
+}
+
+int write_matrix(char * filename, float* src_matrix, int x, int y, int c) {
+    FILE* fp = fopen(filename, "wb");
+    if (fp == NULL) {
+        fprintf(stderr, "write_matrix: could not open file %s\n", filename);
+        return -1;
+    }
+
+    size_t num_elements = (size_t)x * y * c;
+    size_t write_count = fwrite(src_matrix, sizeof(float), num_elements, fp);
+    fclose(fp);
+
+    if (write_count != num_elements) {
+        fprintf(stderr, "write_matrix: expected to write %zu elements, wrote %zu\n",
+                num_elements, write_count);
+        return -1;
+    }
+    return 0;
+}

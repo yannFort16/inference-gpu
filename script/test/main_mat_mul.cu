@@ -1,4 +1,4 @@
-//Compile : nvcc -m64 -diag-suppress 2464  -o matrix_mult.exe .\script\test\main_mat_mut.cu 
+//Compile : nvcc -m64 -diag-suppress 2464  -o matrix_mult.exe .\script\test\main_mat_mul.cu 
 
 #include <stdio.h>
 #include <cuda_runtime.h>
@@ -7,8 +7,13 @@
 #include "../header/utils.h"
 
 
-int main() {
-    printf("===== CUDA Matrix Multiplication =====\n\n");
+int main(int argc, char **argv) {
+    if (argc != 2){
+        printf("Usage: %s <method>\n", argv[0]);
+        printf("Available methods: default, sharedM, streamK, cuBLAS\n");
+        return 1;
+    }
+    printf("===== CUDA %s Matrix Multiplication =====\n\n", argv[1]);
     
     // Define matrix dimensions
     int m = 4;   // A: m x k
@@ -42,7 +47,7 @@ int main() {
     // Allocate device memory and copy data
     printf("\nAllocating device memory and copying data...\n");
 
-    matrix_multiplication(h_A, h_B, h_C, m, n, k, "cuBLAS");
+    matrix_multiplication(h_A, h_B, h_C, m, n, k, argv[1], false, 1.0f, 0.0f);
     
     // Print results
     printf("\nResult matrix C sample:\n");

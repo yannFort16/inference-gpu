@@ -24,7 +24,7 @@ __global__ void point(float *A, float * B, float * C,
                         int m, int n, int k ){
     /*
     Kernel for simple general matrix multiplication. Each thread computes one element from the output.
-    input : matrix A of floats size (m,k), matrix B of floats size (k,n), matrix C of floats size (m,n) to store the result of (alpha * C) + beta * (A@B)
+    input : matrix A of floats size (m,k), matrix B of floats size (k,n), matrix C of floats size (m,n) to store the result of (beta * C) + alpha * (A@B)
     */
     const int row = blockIdx.x * blockDim.x + threadIdx.x;
     const int col = blockIdx.y * blockDim.x + threadIdx.y;
@@ -35,7 +35,7 @@ __global__ void point(float *A, float * B, float * C,
             tmp += A[row * k +i] * B[i * n + col];
         }
 
-        C[row * n + col] = alpha * C[row * n + col] + beta * tmp;
+        C[row * n + col] = beta * C[row * n + col] + alpha * tmp;
     } 
 
 }
@@ -49,8 +49,8 @@ __global__ void point_shared(float *__restrict__ A, float *__restrict__  B, floa
     input : matrix A of floats size (m,k), matrix B of floats size (k,n), matrix C of floats size (m,n) to store the result of A@B 
     */
 
-    __shared__ float tile_A[BLOCK_SIZE][BLOCK_SIZE];
-    __shared__ float tile_B[BLOCK_SIZE][BLOCK_SIZE];
+    __shared__ float tile_A[BLOCK_SIZE * BLOCK_SIZE];
+    __shared__ float tile_B[BLOCK_SIZE * BLOCK_SIZE];
     
     const int tx = threadIdx.x;
     const int ty = threadIdx.y;
@@ -58,7 +58,7 @@ __global__ void point_shared(float *__restrict__ A, float *__restrict__  B, floa
     const int g_row = blockIdx.x * BLOCK_SIZE + ty * THREAD_TILE;
     const int g_col = blockIdx.y * BLOCK_SIZE + tx * THREAD_TILE;
 
-    float accum[THREAD_TILE][THREAD_TILE] = {0.0};
+    float accum[THREAD_TILE * THREAD_TILE] = {0.0};
 
     /*==============LOOP OVER THE TILES TO LOAD SHARED MEMORY==============*/
     const int nb_tiles = ceil_div(k,BLOCK_SIZE);
@@ -74,7 +74,7 @@ __global__ void point_shared(float *__restrict__ A, float *__restrict__  B, floa
                 int sharedRow = ty * THREAD_TILE + v;
                 int sharedCol = tx * THREAD_TILE + u;
                 //Load A in shared memory
-                tile_A[sharedRow][sharedCol] = (row < m && colA < k)
+                tile_A[sharedRow * BLOCK_SIZE + sharedCol] = (row < m && colA < k)
                     ? A[row * k + colA]
                     : 0.0f;
             }
@@ -88,7 +88,7 @@ __global__ void point_shared(float *__restrict__ A, float *__restrict__  B, floa
                 int sharedCol = tx * THREAD_TILE + u;
                 //Load B in shared memory
                 //Transposing B for easier memory access
-                tile_B[sharedCol][sharedRow] = (rowB < k && col < n)
+                tile_B[sharedCol * BLOCK_SIZE + sharedRow] = (rowB < k && col < n)
                     ? B[rowB * n + col]
                     : 0.0f;
             }
@@ -104,9 +104,9 @@ __global__ void point_shared(float *__restrict__ A, float *__restrict__  B, floa
 
             for(int v =0; v<THREAD_TILE; v++){
                 //Load thread tile from A in shared memory in order to have const
-                regA[v] = tile_A[ty * THREAD_TILE + v][i];
+                regA[v] = tile_A[(ty * THREAD_TILE + v) * BLOCK_SIZE + i];
                 //Load thread tile from B in shared memory in order to have const
-                regB[v] = tile_B[tx * THREAD_TILE + v][i];
+                regB[v] = tile_B[(tx * THREAD_TILE + v) * BLOCK_SIZE + i];
             }
 
             //Matrix Multiplication Loop
@@ -114,7 +114,7 @@ __global__ void point_shared(float *__restrict__ A, float *__restrict__  B, floa
             for (int v = 0; v < THREAD_TILE; v++){
                 #pragma unroll
                 for (int w = 0; w < THREAD_TILE; w++){
-                    accum[v][w] += regA[v] * regB[w];
+                    accum[v * THREAD_TILE + w] += regA[v] * regB[w];
                 }
             }
         }
@@ -131,7 +131,7 @@ __global__ void point_shared(float *__restrict__ A, float *__restrict__  B, floa
             int row = g_row + v;
             int col = g_col + w;
             if (row < m && col < n){
-                C[row * n + col] = alpha * C[row * n + col] + beta * accum[v][w];
+                C[row * n + col] = beta * C[row * n + col] + alpha * accum[v * THREAD_TILE + w];
             }
         }
     }
@@ -233,7 +233,7 @@ __global__ void streamK_point(float *A, float * B, float * C,
                 int last_cta_for_tile = (tile_iter_end - 1) / iter_per_cta;
                 for(int cta = cta_id + 1; cta <= last_cta_for_tile; cta++){
                     float* partial_tile = partials + cta * BLK_M * BLK_N;
-                    while((volatile int*)flags[cta] == 0){
+                    while(*(volatile int*)&flags[cta] == 0){
                         __nanosleep(10);
                     }
 
@@ -321,10 +321,20 @@ int matrix_multiplication (float * A, float * B, float* C,
     if (strcmp(methode, "default") == 0){
         cudaEventRecord(afterH2D);
         point<<<gridDim, blockDim>>>(d_A, d_B, d_C, alpha, beta, m, n, k);
+        cudaError_t e = cudaGetLastError();
+        if(e != cudaSuccess){
+            printf("Error during kernel launch: %s\n", cudaGetErrorString(e));
+        }
+        cudaDeviceSynchronize();
         cudaEventRecord(afterKernel);
     }else if (strcmp(methode, "sharedM") == 0){
         cudaEventRecord(afterH2D);
         point_shared<<<gridDim, blockDimShared>>>(d_A, d_B, d_C, alpha, beta, m, n, k);
+        cudaError_t e = cudaGetLastError();
+        if(e != cudaSuccess){
+            printf("Error during kernel launch: %s\n", cudaGetErrorString(e));
+        }
+        cudaDeviceSynchronize();
         cudaEventRecord(afterKernel);
     }else if (strcmp(methode, "streamK") == 0){
         int* flags;
@@ -341,13 +351,22 @@ int matrix_multiplication (float * A, float * B, float* C,
         
         cudaEventRecord(afterH2D);
         streamK_point<<<gridDim, blockDim>>>(d_A, d_B, d_C, flags, partials, m, n, k);
+        cudaError_t e = cudaGetLastError();
+        if(e != cudaSuccess){
+            printf("Error during kernel launch: %s\n", cudaGetErrorString(e));
+        }
+        cudaDeviceSynchronize();
         cudaEventRecord(afterKernel); 
 
         cudaFree(flags);
         cudaFree(partials);
     }else if (strcmp(methode, "cuBLAS") == 0){
         cudaEventRecord(afterH2D);
-        cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, &beta, d_B, n, d_A, k, &alpha, d_C, n);
+        cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, &alpha, d_B, n, d_A, k, &beta, d_C, n);
+        cudaError_t e = cudaGetLastError();
+        if(e != cudaSuccess){
+            printf("Error during kernel launch: %s\n", cudaGetErrorString(e));
+        }
         cudaDeviceSynchronize();
         cudaEventRecord(afterKernel); 
     }else{
@@ -362,7 +381,10 @@ int matrix_multiplication (float * A, float * B, float* C,
     
     // Copy result back to host
     //printf("Copying results back to host...\n");
-    cudaMemcpy(C, d_C, bytes_C, cudaMemcpyDeviceToHost);
+    cudaError_t e = cudaMemcpy(C, d_C, bytes_C, cudaMemcpyDeviceToHost);
+    if(e != cudaSuccess){
+        printf("Error during kernel launch: %s\n", cudaGetErrorString(e));
+    }
     cudaEventRecord(afterD2H);
 
     cudaFree(d_A);
@@ -381,6 +403,10 @@ int matrix_multiplication (float * A, float * B, float* C,
         print_performance(h2d_ms, kernel_ms, d2h_ms, total_ms, methode);
     } 
 
+    /*cudaEventDestroy(start);
+    cudaEventDestroy(afterH2D);
+    cudaEventDestroy(afterKernel);
+    cudaEventDestroy(afterD2H);*/
     return 0;
 }
 
