@@ -1,36 +1,166 @@
 # inference-gpu
 
-Optimization of Neural Networks Operations for GPU
+CUDA implementations of common neural-network building blocks for GPU execution, including matrix multiplication, convolution, and pooling.
 
-## Matrix Multiplication : the base of inference of Neural Networks
+## What is in this project?
 
-This repository includes multiple CUDA matrix multiplication implementation in `script/operations/mat_mul.cu` and a simple test script in `script/test/main_mat_mul.cu`. The program computes **`C = (alpha * C) + beta * (A@B)`**
+This repository contains:
 
-### Build
+- CUDA matrix multiplication kernels in `script/operation/mat_mul.cu`
+- CUDA convolution kernels in `script/operation/convolution.cu`
+- CUDA pooling kernels in `script/operation/pooling.cu`
+- Small demo programs and validation/benchmark drivers in `script/test/`
+- A Makefile that builds everything into the `exec/` folder
 
-From the repository root, use `nvcc` to compile the test program:
+The core operation is:
+
+$$C = \alpha \cdot C + \beta \cdot (A \times B)$$
+
+for matrix multiplication, while convolution and pooling are exposed through dedicated GPU kernels.
+
+## Requirements
+
+- NVIDIA GPU with CUDA support
+- CUDA Toolkit with `nvcc`
+- A working `make` installation
+
+On Windows, the Makefile currently points `CUDA_PATH` to a specific CUDA installation directory. If your CUDA toolkit is installed elsewhere, update the `CUDA_PATH` line in the Makefile before building.
+
+## Build targets
+
+From the repository root, the available Makefile targets are:
 
 ```bash
-nvcc -m64 -diag-suppress 2464 -o matrix_mult.exe script/test/main_mat_mul.cu
+make all
 ```
 
-### Run
+Builds all executables:
 
-After compiling, run the generated executable:
+- `exec/main_mat_mul.exe`
+- `exec/test_mat_mul.exe`
+- `exec/test_convolution.exe`
+- `exec/test_pool.exe`
+- `exec/test_main.exe`
+- `exec/main.exe`
+
+Other useful targets:
 
 ```bash
-./matrix_mult.exe
+make mat_mul
 ```
 
-The test program will:
+Builds the matrix multiplication demos and validation executables.
 
-- allocate random matrices `A` and `B`
-- initialize `C` to zeros. (`C` Can also be allocated but `alpha` has to be changed)
-- call `matrix_multiplication(...)` with the `sharedM` method
-- print sample values for input matrices and the resulting output matrix.
+```bash
+make convolution
+```
 
-### Notes
+Builds the convolution and pooling demos.
 
-- The matrix multiplication logic is defined in `script/operations/mat_mul.cu`.
-- The `matrix_multiplication` function supports three modes: `default`, `sharedM`, and `streamK`.
-- The sample driver currently uses `sharedM` for better GPU memory performance.
+```bash
+make clean
+```
+
+Removes the generated binaries from `exec/`.
+
+## Running the demos
+
+### 1. Matrix multiplication demo
+
+```bash
+./exec/main_mat_mul.exe sharedM
+```
+
+This runs a small sample program that:
+
+- creates random matrices `A` and `B`
+- runs a matrix multiplication using the requested method
+- prints the resulting matrix sample
+
+Supported methods for this demo are the ones exposed by the kernel interface, such as `default`, `sharedM`, `streamK`, and `cuBLAS` depending on the driver.
+
+### 2. General CLI entry point
+
+```bash
+./exec/main.exe multiplication <input_A> <input_B> <output> <M> <N> <K> <alpha> <beta> -g
+```
+
+This generic driver supports:
+
+- `multiplication`
+- `convolution`
+- `pooling`
+
+Examples:
+
+```bash
+./exec/main.exe multiplication A.txt B.txt C.txt 64 32 16 1.0 0.0 -g
+./exec/main.exe convolution input.txt filter.txt out.txt 128 128 3 1 1 true 0.0 -g
+./exec/main.exe pooling input.txt filter.txt out.txt 128 128 3 1 1 true 0.0 -g
+```
+
+The `-g` flag generates random input matrices. Without it, the program reads the input matrices from files.
+
+## Running the tests
+
+### Matrix multiplication validation
+
+```bash
+./exec/test_mat_mul.exe default sharedM t
+```
+
+This runs a set of validation cases comparing two implementations of matrix multiplication and reports whether they agree.
+
+- `t` stands for test mode
+- The program uses several fixed-size test cases and checks correctness
+
+### Convolution validation
+
+```bash
+./exec/test_convolution.exe default shared t
+```
+
+This validates convolution correctness by comparing two convolution implementations on several test cases.
+
+### Main matrix multiplication verification
+
+```bash
+./exec/test_main.exe <input_A> <input_B> <expected_output> <M> <N> <K>
+```
+
+This utility reads matrices from files, runs a reference multiplication, and checks the result against the expected output file.
+
+## Running benchmarks
+
+### Matrix multiplication benchmark
+
+```bash
+./exec/test_mat_mul.exe default sharedM b
+```
+
+This runs a benchmark loop for matrix multiplication using larger problem sizes and prints timing information.
+
+- `b` stands for benchmark mode
+
+### Convolution benchmark
+
+```bash
+./exec/test_convolution.exe default shared b
+```
+
+This runs a convolution benchmark loop and prints timing information for the two implementations.
+
+## Pooling demo
+
+```bash
+./exec/test_pool.exe
+```
+
+This launches a small pooling example with a random input matrix and prints the pooling result.
+
+## Notes
+
+- The source code and headers live under `script/operation/` and `script/header/`.
+- The matrix multiplication kernel supports modes such as `default`, `sharedM`, and `streamK`.
+- The convolution interface supports a configurable padding mode and stride.
+- The pooling interface supports max or average pooling.
