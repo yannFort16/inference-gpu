@@ -1,5 +1,11 @@
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h> 
+#include <cuda_runtime.h>
+#include "cublas_v2.h"
+
+
+#include "../header/mat_mul.h"
 
 //For StreamK
 #define BLK_M 64 //Tile dim in M
@@ -17,8 +23,8 @@ __global__ void point(float *A, float * B, float * C,
                         float alpha, float beta, 
                         int m, int n, int k ){
     /*
-    Kernel for simple general matrix multiplication.
-    input : matrix A of floats size (m,k), matrix B of floats size (k,n), matrix C of floats size (m,n) to store the result of (alpha * C) + beta * (A@B)
+    Kernel for simple general matrix multiplication. Each thread computes one element from the output.
+    input : matrix A of floats size (m,k), matrix B of floats size (k,n), matrix C of floats size (m,n) to store the result of (beta * C) + alpha * (A@B)
     */
     const int row = blockIdx.x * blockDim.x + threadIdx.x;
     const int col = blockIdx.y * blockDim.x + threadIdx.y;
@@ -29,7 +35,7 @@ __global__ void point(float *A, float * B, float * C,
             tmp += A[row * k +i] * B[i * n + col];
         }
 
-        C[row * n + col] = alpha * C[row * n + col] + beta * tmp;
+        C[row * n + col] = beta * C[row * n + col] + alpha * tmp;
     } 
 
 }
@@ -43,8 +49,8 @@ __global__ void point_shared(float *__restrict__ A, float *__restrict__  B, floa
     input : matrix A of floats size (m,k), matrix B of floats size (k,n), matrix C of floats size (m,n) to store the result of A@B 
     */
 
-    __shared__ float tile_A[BLOCK_SIZE][BLOCK_SIZE];
-    __shared__ float tile_B[BLOCK_SIZE][BLOCK_SIZE];
+    __shared__ float tile_A[BLOCK_SIZE * BLOCK_SIZE];
+    __shared__ float tile_B[BLOCK_SIZE * BLOCK_SIZE];
     
     const int tx = threadIdx.x;
     const int ty = threadIdx.y;
@@ -52,7 +58,7 @@ __global__ void point_shared(float *__restrict__ A, float *__restrict__  B, floa
     const int g_row = blockIdx.x * BLOCK_SIZE + ty * THREAD_TILE;
     const int g_col = blockIdx.y * BLOCK_SIZE + tx * THREAD_TILE;
 
-    float accum[THREAD_TILE][THREAD_TILE] = {0.0};
+    float accum[THREAD_TILE * THREAD_TILE] = {0.0};
 
     /*==============LOOP OVER THE TILES TO LOAD SHARED MEMORY==============*/
     const int nb_tiles = ceil_div(k,BLOCK_SIZE);
@@ -68,7 +74,7 @@ __global__ void point_shared(float *__restrict__ A, float *__restrict__  B, floa
                 int sharedRow = ty * THREAD_TILE + v;
                 int sharedCol = tx * THREAD_TILE + u;
                 //Load A in shared memory
-                tile_A[sharedRow][sharedCol] = (row < m && colA < k)
+                tile_A[sharedRow * BLOCK_SIZE + sharedCol] = (row < m && colA < k)
                     ? A[row * k + colA]
                     : 0.0f;
             }
@@ -82,7 +88,7 @@ __global__ void point_shared(float *__restrict__ A, float *__restrict__  B, floa
                 int sharedCol = tx * THREAD_TILE + u;
                 //Load B in shared memory
                 //Transposing B for easier memory access
-                tile_B[sharedCol][sharedRow] = (rowB < k && col < n)
+                tile_B[sharedCol * BLOCK_SIZE + sharedRow] = (rowB < k && col < n)
                     ? B[rowB * n + col]
                     : 0.0f;
             }
@@ -98,9 +104,9 @@ __global__ void point_shared(float *__restrict__ A, float *__restrict__  B, floa
 
             for(int v =0; v<THREAD_TILE; v++){
                 //Load thread tile from A in shared memory in order to have const
-                regA[v] = tile_A[ty * THREAD_TILE + v][i];
+                regA[v] = tile_A[(ty * THREAD_TILE + v) * BLOCK_SIZE + i];
                 //Load thread tile from B in shared memory in order to have const
-                regB[v] = tile_B[tx * THREAD_TILE + v][i];
+                regB[v] = tile_B[(tx * THREAD_TILE + v) * BLOCK_SIZE + i];
             }
 
             //Matrix Multiplication Loop
@@ -108,7 +114,7 @@ __global__ void point_shared(float *__restrict__ A, float *__restrict__  B, floa
             for (int v = 0; v < THREAD_TILE; v++){
                 #pragma unroll
                 for (int w = 0; w < THREAD_TILE; w++){
-                    accum[v][w] += regA[v] * regB[w];
+                    accum[v * THREAD_TILE + w] += regA[v] * regB[w];
                 }
             }
         }
@@ -125,7 +131,7 @@ __global__ void point_shared(float *__restrict__ A, float *__restrict__  B, floa
             int row = g_row + v;
             int col = g_col + w;
             if (row < m && col < n){
-                C[row * n + col] = alpha * C[row * n + col] + beta * accum[v][w];
+                C[row * n + col] = beta * C[row * n + col] + alpha * accum[v * THREAD_TILE + w];
             }
         }
     }
@@ -227,7 +233,7 @@ __global__ void streamK_point(float *A, float * B, float * C,
                 int last_cta_for_tile = (tile_iter_end - 1) / iter_per_cta;
                 for(int cta = cta_id + 1; cta <= last_cta_for_tile; cta++){
                     float* partial_tile = partials + cta * BLK_M * BLK_N;
-                    while((volatile int*)flags[cta] == 0){
+                    while(*(volatile int*)&flags[cta] == 0){
                         __nanosleep(10);
                     }
 
@@ -255,21 +261,15 @@ __global__ void streamK_point(float *A, float * B, float * C,
 }
 
 
-void print_performance(float h2d_ms, float kernel_ms, float d2h_ms, float total_ms){
-    printf("  CUDA total (ms)\t|  Comput. Kernel(ms)\t|  Data trans. H->D(ms)\t|  Data trans. D->H(ms)\t|\n");
-    printf("  %.5f\t\t|  %.5f\t\t|  %.5f\t\t|  %.5f\t\t|\n", total_ms, kernel_ms, h2d_ms, d2h_ms);
+void print_performance(float h2d_ms, float kernel_ms, float d2h_ms, float total_ms, char* methode){
+    printf("\t\t  CUDA total (ms)\t|  Comput. Kernel(ms)\t|  Data trans. H->D(ms)\t|  Data trans. D->H(ms)\t|\n");
+    printf("%s ->\t  %.5f\t\t|  %.5f\t\t|  %.5f\t\t|  %.5f\t\t|\n\n", methode, total_ms, kernel_ms, h2d_ms, d2h_ms);
 }
 
 int matrix_multiplication (float * A, float * B, float* C,
-                            int m, int n, int k, char* methode = "default", 
-                            bool perf = false, float alpha = 0.0, float beta = 1.0){
-    /*General Matrix Multiplication using parallele compluting.
-        Compute (alpha * C) + beta * (A@B)
-    Mehodes :
-        - default => simple no optimization
-        - sharedM => unsing shared memory + transposed B matrix
-        - streamK => tile decomposition (NOT Working)
-    */
+                            int m, int n, int k, char* methode, 
+                            bool perf, float alpha, float beta){
+    
 
     int gridDimX = (m + BLOCK_SIZE - 1) / BLOCK_SIZE;
     int gridDimY = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
@@ -279,14 +279,6 @@ int matrix_multiplication (float * A, float * B, float* C,
     dim3 blockDimShared(BLOCK_SIZE / THREAD_TILE, BLOCK_SIZE / THREAD_TILE);
     dim3 gridDim(gridDimX, gridDimY);
 
-
-    float *d_A;
-    float *d_B;
-    float *d_C;
-
-    size_t bytes_A = m * k * sizeof(float);
-    size_t bytes_B = k * n * sizeof(float);
-    size_t bytes_C = m * n * sizeof(float);
     
     // Events for CUDA timing
     cudaEvent_t start, afterH2D, afterKernel, afterD2H;
@@ -295,26 +287,54 @@ int matrix_multiplication (float * A, float * B, float* C,
     cudaEventCreate(&afterKernel);
     cudaEventCreate(&afterD2H);
 
+    float *d_A;
+    float *d_B;
+    float *d_C;
+
+    size_t bytes_A = m * k * sizeof(float);
+    size_t bytes_B = k * n * sizeof(float);
+    size_t bytes_C = m * n * sizeof(float);
+
+
     // Allocate device memory
     cudaMalloc((void**)&d_A, bytes_A);
     cudaMalloc((void**)&d_B, bytes_B);
     cudaMalloc((void**)&d_C, bytes_C);
-
-    // Host to Device
+    
+    //Create Handle:
+    cublasStatus_t stat;
+    cublasHandle_t handle;
+    
+    stat = cublasCreate(&handle);
+    if (stat != CUBLAS_STATUS_SUCCESS) {
+        printf ("CUBLAS initialization failed (code %d)\n", stat);
+        return EXIT_FAILURE;
+    }
+    
     cudaEventRecord(start);
+    // Host to Device
     cudaMemcpy(d_A, A, bytes_A, cudaMemcpyHostToDevice);
     cudaMemcpy(d_B, B, bytes_B, cudaMemcpyHostToDevice);
     cudaMemcpy(d_C, C, bytes_C, cudaMemcpyHostToDevice);
-    
 
     // Launch kernel
     if (strcmp(methode, "default") == 0){
         cudaEventRecord(afterH2D);
         point<<<gridDim, blockDim>>>(d_A, d_B, d_C, alpha, beta, m, n, k);
+        cudaError_t e = cudaGetLastError();
+        if(e != cudaSuccess){
+            printf("Error during kernel launch: %s\n", cudaGetErrorString(e));
+        }
+        cudaDeviceSynchronize();
         cudaEventRecord(afterKernel);
     }else if (strcmp(methode, "sharedM") == 0){
         cudaEventRecord(afterH2D);
         point_shared<<<gridDim, blockDimShared>>>(d_A, d_B, d_C, alpha, beta, m, n, k);
+        cudaError_t e = cudaGetLastError();
+        if(e != cudaSuccess){
+            printf("Error during kernel launch: %s\n", cudaGetErrorString(e));
+        }
+        cudaDeviceSynchronize();
         cudaEventRecord(afterKernel);
     }else if (strcmp(methode, "streamK") == 0){
         int* flags;
@@ -331,34 +351,63 @@ int matrix_multiplication (float * A, float * B, float* C,
         
         cudaEventRecord(afterH2D);
         streamK_point<<<gridDim, blockDim>>>(d_A, d_B, d_C, flags, partials, m, n, k);
+        cudaError_t e = cudaGetLastError();
+        if(e != cudaSuccess){
+            printf("Error during kernel launch: %s\n", cudaGetErrorString(e));
+        }
+        cudaDeviceSynchronize();
         cudaEventRecord(afterKernel); 
 
         cudaFree(flags);
         cudaFree(partials);
+    }else if (strcmp(methode, "cuBLAS") == 0){
+        cudaEventRecord(afterH2D);
+        cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, &alpha, d_B, n, d_A, k, &beta, d_C, n);
+        cudaError_t e = cudaGetLastError();
+        if(e != cudaSuccess){
+            printf("Error during kernel launch: %s\n", cudaGetErrorString(e));
+        }
+        cudaDeviceSynchronize();
+        cudaEventRecord(afterKernel); 
     }else{
         cudaFree(d_A);
         cudaFree(d_B);
         cudaFree(d_C);
-        return 1;
+        cublasDestroy(handle);
+        return EXIT_FAILURE;
     }
     
     //printf("Kernel execution completed!\n");
     
     // Copy result back to host
     //printf("Copying results back to host...\n");
-    cudaMemcpy(C, d_C, bytes_C, cudaMemcpyDeviceToHost);
+    cudaError_t e = cudaMemcpy(C, d_C, bytes_C, cudaMemcpyDeviceToHost);
+    if(e != cudaSuccess){
+        printf("Error during kernel launch: %s\n", cudaGetErrorString(e));
+    }
     cudaEventRecord(afterD2H);
 
     cudaFree(d_A);
     cudaFree(d_B);
     cudaFree(d_C);
+    cublasDestroy(handle);
+    
+    
 
-    float h2d_ms, kernel_ms, d2h_ms, total_ms;
-    cudaEventElapsedTime(&h2d_ms, start, afterH2D);
-    cudaEventElapsedTime(&kernel_ms, afterH2D, afterKernel);
-    cudaEventElapsedTime(&d2h_ms, afterKernel, afterD2H);
-    cudaEventElapsedTime(&total_ms, start, afterD2H);
+    if (perf){
+        float h2d_ms, kernel_ms, d2h_ms, total_ms;
+        cudaEventElapsedTime(&h2d_ms, start, afterH2D);
+        cudaEventElapsedTime(&kernel_ms, afterH2D, afterKernel);
+        cudaEventElapsedTime(&d2h_ms, afterKernel, afterD2H);
+        cudaEventElapsedTime(&total_ms, start, afterD2H);
+        print_performance(h2d_ms, kernel_ms, d2h_ms, total_ms, methode);
+    } 
 
-    if (perf) print_performance(h2d_ms, kernel_ms, d2h_ms, total_ms);
+    /*cudaEventDestroy(start);
+    cudaEventDestroy(afterH2D);
+    cudaEventDestroy(afterKernel);
+    cudaEventDestroy(afterD2H);*/
     return 0;
 }
+
+

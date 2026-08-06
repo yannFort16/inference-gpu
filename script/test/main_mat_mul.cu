@@ -1,74 +1,19 @@
-//Compile : nvcc -m64 -diag-suppress 2464  -o matrix_mult.exe .\script\test\main_mat_mut.cu 
+//Compile : nvcc -m64 -diag-suppress 2464  -o matrix_mult.exe .\script\test\main_mat_mul.cu 
 
 #include <stdio.h>
 #include <cuda_runtime.h>
 #include <time.h>
-#include "../operations/mat_mul.cu"
+#include "../header/mat_mul.h"
+#include "../header/utils.h"
 
-// Function to generate random matrix on host
-void generateRandomMatrix(float *matrix, int rows, int cols) {
-    srand(time(NULL));
-    for (int i = 0; i < rows * cols; i++) {
-        //matrix[i] = (float)rand() / RAND_MAX * 10.0;  // Random values between 0 and 10
-        matrix[i] = rand() % 6; // Random int between 0 and 5
+
+int main(int argc, char **argv) {
+    if (argc != 2){
+        printf("Usage: %s <method>\n", argv[0]);
+        printf("Available methods: default, sharedM, streamK, cuBLAS\n");
+        return 1;
     }
-}
-
-// Function to verify results
-void printMatrix(const float *matrix, int rows, int cols, int maxElements = 5) {
-    /*int min_x = min(rows, maxElements);
-    int min_y = min(cols, maxElements);
-    for (int i = 0; i< min_x; ++i){
-        for(int j = 0; j< min_y; ++j){
-            if (i == rows-1 || j == cols-1 || i<=maxElements-2 || j<=maxElements-2 )
-            {
-                printf("%f ", matrix[i*cols+j]);
-            }            else{
-                printf("... ");
-            }
-        }
-        printf("\n");
-    }*/
-    using std::min;
-
-    int visibleRows = min(rows, maxElements);
-    int visibleCols = min(cols, maxElements);
-
-    for (int i = 0; i < rows; ++i)
-    {
-        // Skip middle rows
-        if (rows > maxElements + 1 &&
-            i >= visibleRows - 1 &&
-            i < rows - 1)
-        {
-            if (i == visibleRows - 1)
-                printf("\t...\n");
-
-            continue;
-        }
-
-        for (int j = 0; j < cols; ++j)
-        {
-            // Skip middle columns
-            if (cols > maxElements + 1 &&
-                j >= visibleCols - 1 &&
-                j < cols - 1)
-            {
-                if (j == visibleCols - 1)
-                    printf("... ");
-
-                continue;
-            }
-
-            printf("%8.3f ", matrix[i * cols + j]);
-        }
-
-        printf("\n");
-    }
-}
-
-int main() {
-    printf("===== CUDA Matrix Multiplication =====\n\n");
+    printf("===== CUDA %s Matrix Multiplication =====\n\n", argv[1]);
     
     // Define matrix dimensions
     int m = 4;   // A: m x k
@@ -91,8 +36,8 @@ int main() {
     
     // Generate random matrices
     printf("Generating random matrices...\n");
-    generateRandomMatrix(h_A, m, k);
-    generateRandomMatrix(h_B, k, n);
+    generateRandomMatrix(h_A, m, k, 10, true);
+    generateRandomMatrix(h_B, k, n, 10, true);
     
     printf("Matrix A sample:\n");
     printMatrix(h_A, m, k, 5);
@@ -102,7 +47,7 @@ int main() {
     // Allocate device memory and copy data
     printf("\nAllocating device memory and copying data...\n");
 
-    matrix_multiplication(h_A, h_B, h_C, m, n, k, "sharedM");
+    matrix_multiplication(h_A, h_B, h_C, m, n, k, argv[1], false, 1.0f, 0.0f);
     
     // Print results
     printf("\nResult matrix C sample:\n");

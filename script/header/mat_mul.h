@@ -1,0 +1,21 @@
+#ifndef MAT_MUL_H
+#define MAT_MUL_H
+
+__device__ inline int ceil_div(int a, int b); 
+
+int matrix_multiplication (float * A, float * B, float* C,
+                            int m, int n, int k, char* methode = "default", 
+                            bool perf = false, float alpha = 1.0, float beta = 0.0);
+/*General Matrix Multiplication using parallele compluting.
+        Compute (alpha * C) + beta * (A@B)
+
+    A = (m, k)  |  B = (k, n)  | C = (m, n)
+    Mehodes :
+        - default => simple no optimization
+        - sharedM => unsing shared memory + transposed B matrix
+        - streamK => tile decomposition (NOT Working)
+*/
+
+void print_performance(float h2d_ms, float kernel_ms, float d2h_ms, float total_ms, char* methode);
+
+#endif
